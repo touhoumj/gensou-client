@@ -331,6 +331,7 @@ BOOL WINAPI DllMain(HINSTANCE hinstDLL, DWORD fdwReason, LPVOID lpvReserved)
             AllocConsole();
             freopen_s((FILE **)stdout, "CONOUT$", "w", stdout);
             freopen_s((FILE **)stderr, "CONOUT$", "w", stderr);
+
             preflight();
             install_hooks();
             break;

@@ -1,5 +1,6 @@
 cmake_minimum_required(VERSION 3.18)
 project(thmj4n_tools)
+
 set(CMAKE_C_STANDARD 99)
 set(CMAKE_C_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_STANDARD 17)
@@ -17,7 +18,7 @@ if("$ENV{DETOURS_SRC}" STREQUAL "")
     message(FATAL_ERROR "DETOURS_SRC must point to the detours source tree")
 endif()
 
-message(STATUS "$ENV{DETOURS_SRC}")
+add_link_options($<$<CONFIG:RELEASE>:-s>)
 
 add_library(kotldr SHARED
     blowfish.c

@@ -19,7 +19,7 @@
 
         detours = win32Pkgs.callPackage ./nix/pkgs/detours.nix { };
 
-        tools = win32Pkgs.stdenv.mkDerivation {
+        tools = pkgs.stdenv.mkDerivation {
           pname = "thmj4n-tools";
           version = "1.0.0";
 
@@ -31,14 +31,23 @@
               (nix-filter.lib.matchExt "c")
               (nix-filter.lib.matchExt "h")
               (nix-filter.lib.matchExt "cpp")
+              (nix-filter.lib.inDirectory "toolchain")
             ];
           };
 
           nativeBuildInputs = with pkgs; [
             cmake
+            zig
+          ];
+
+          cmakeFlags = [
+            "-DCMAKE_TOOLCHAIN_FILE=toolchain/x86-windows-gnu.cmake"
           ];
 
           DETOURS_SRC = detours;
+
+          ZIG_LOCAL_CACHE_DIR = "$TMPDIR/zig-cache";
+          ZIG_GLOBAL_CACHE_DIR = "ZIG_LOCAL_CACHE_DIR";
         };
 
         deps = pkgs.stdenv.mkDerivation {
@@ -66,11 +75,16 @@
 
         devShells.default = pkgs.mkShell {
           packages = with pkgs; [
+            cmake
+            ninja
             upx
+            zig
 
             python311Packages.pefile
             python311Packages.python
           ];
+
+          DETOURS_SRC = detours;
         };
 
         packages.default = deps;
