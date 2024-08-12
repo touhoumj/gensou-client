@@ -165,12 +165,15 @@ unsigned char *encrypt(unsigned char *buffer, size_t *size)
     BLOWFISH_CTX ctx;
     Blowfish_Init(&ctx, thmj4n_key, sizeof(thmj4n_key));
 
-    *size = (*size + 7) & ~7;
-    if(!(buffer = (unsigned char *)realloc(buffer, *size))) {
+    size_t new_size = (*size + 7) & ~7;
+    if(!(buffer = (unsigned char *)realloc(buffer, new_size))) {
         fprintf(stderr, "Failed to reallocate buffer for blowfish encryption\n");
         _getch();
         exit(1);
     }
+
+    fprintf(stderr, "Resized buffer: %zu -> %zu\n", *size, new_size);
+    memset(buffer + *size, 0, new_size - *size);
 
     size_t half_block = sizeof(unsigned long);
     for(int i = 0; i < *size; i += (2 * half_block)) {
@@ -183,6 +186,7 @@ unsigned char *encrypt(unsigned char *buffer, size_t *size)
         memcpy(&buffer[i + half_block], &R, half_block);
     }
 
+    *size = new_size;
     return buffer;
 }
 
