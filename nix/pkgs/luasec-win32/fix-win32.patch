@@ -1,0 +1,32 @@
+diff --git a/src/Makefile b/src/Makefile
+index 9b06a03..342993f 100644
+--- a/src/Makefile
++++ b/src/Makefile
+@@ -9,7 +9,7 @@ OBJS= \
+  config.o  \
+  ec.o
+ 
+-LIBS=-lssl -lcrypto -lluasocket
++LIBS=-lssl -lcrypto -lluasocket -llua -lcrypt32 -lws2_32
+ 
+ WARN=-Wall -pedantic
+ 
+diff --git a/src/luasocket/Makefile b/src/luasocket/Makefile
+index b700fb6..b92fc02 100644
+--- a/src/luasocket/Makefile
++++ b/src/luasocket/Makefile
+@@ -2,7 +2,7 @@ OBJS= \
+  io.o \
+  buffer.o \
+  timeout.o \
+- usocket.o
++ wsocket.o
+ 
+ CC	?= cc
+ CFLAGS	+= $(MYCFLAGS) -DLUASOCKET_DEBUG
+@@ -23,4 +23,4 @@ clean:
+ buffer.o: buffer.c buffer.h io.h timeout.h
+ io.o: io.c io.h timeout.h
+ timeout.o: timeout.c timeout.h
+-usocket.o: usocket.c socket.h io.h timeout.h usocket.h
++wsocket.o: wsocket.c socket.h io.h timeout.h wsocket.h

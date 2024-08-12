@@ -1,0 +1,26 @@
+--- a/src/Makefile	2024-08-11 18:44:52.789010290 -0400
++++ b/src/Makefile	2024-08-11 18:44:55.887055316 -0400
+@@ -6,11 +6,12 @@
+
+ # Your platform. See PLATS for possible values.
+ PLAT= none
++PREFIX=
+
+-CC= gcc
++CC= $(PREFIX)gcc
+ CFLAGS= -O2 -Wall $(MYCFLAGS)
+-AR= ar rcu
+-RANLIB= ranlib
++AR= $(PREFIX)ar rcu
++RANLIB= $(PREFIX)ranlib
+ RM= rm -f
+ LIBS= -lm $(MYLIBS)
+
+@@ -105,7 +106,7 @@
+
+ mingw:
+ 	$(MAKE) "LUA_A=lua51.dll" "LUA_T=lua.exe" \
+-	"AR=$(CC) -shared -o" "RANLIB=strip --strip-unneeded" \
++	"AR=$(CC) -shared -o" "RANLIB=$(PREFIX)strip --strip-unneeded" \
+ 	"MYCFLAGS=-DLUA_BUILD_AS_DLL" "MYLIBS=" "MYLDFLAGS=-s" lua.exe
+ 	$(MAKE) "LUAC_T=luac.exe" luac.exe
