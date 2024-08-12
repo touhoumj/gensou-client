@@ -32,6 +32,7 @@ stdenv.mkDerivation rec {
     "CMOD=ssl.dll"
     "LUAPATH=${placeholder "out"}/share/lua/5.1"
     "LUACPATH=${placeholder "out"}/lib/lua/5.1"
+    "LIBLUA=${lua5_1}/bin/lua51.dll"
   ];
 
   patches = [

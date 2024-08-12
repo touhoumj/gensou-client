@@ -1,13 +1,14 @@
 diff --git a/src/Makefile b/src/Makefile
-index 9b06a03..342993f 100644
+index 9b06a03..9bf0f5c 100644
 --- a/src/Makefile
 +++ b/src/Makefile
-@@ -9,7 +9,7 @@ OBJS= \
+@@ -9,7 +9,8 @@ OBJS= \
   config.o  \
   ec.o
  
 -LIBS=-lssl -lcrypto -lluasocket
-+LIBS=-lssl -lcrypto -lluasocket -llua -lcrypt32 -lws2_32
++LIBLUA=lua51.dll
++LIBS=-lssl -lcrypto -lluasocket -lcrypt32 -lws2_32 $(LIBLUA)
  
  WARN=-Wall -pedantic
  
