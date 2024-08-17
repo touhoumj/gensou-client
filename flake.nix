@@ -11,6 +11,9 @@
         pkgs = nixpkgs.legacyPackages.${system};
         win32Pkgs = pkgs.callPackage ./nix/cross/win32.nix { };
 
+        zig-cross = pkgs.callPackage ./nix/pkgs/zig-cross.nix { };
+
+        effil-win32 = win32Pkgs.callPackage ./nix/pkgs/effil-win32.nix { inherit zig-cross; };
         luajit-win32 = win32Pkgs.callPackage ./nix/pkgs/luajit-win32.nix {
           hostStdenv = pkgs.pkgsi686Linux.stdenv;
         };
@@ -31,7 +34,6 @@
               (nix-filter.lib.matchExt "c")
               (nix-filter.lib.matchExt "h")
               (nix-filter.lib.matchExt "cpp")
-              (nix-filter.lib.inDirectory "toolchain")
             ];
           };
 
@@ -41,13 +43,10 @@
           ];
 
           cmakeFlags = [
-            "-DCMAKE_TOOLCHAIN_FILE=toolchain/x86-windows-gnu.cmake"
+            "-DCMAKE_TOOLCHAIN_FILE=${zig-cross}"
           ];
 
           DETOURS_SRC = detours;
-
-          ZIG_LOCAL_CACHE_DIR = "$TMPDIR/zig-cache";
-          ZIG_GLOBAL_CACHE_DIR = "ZIG_LOCAL_CACHE_DIR";
         };
 
         deps = pkgs.stdenv.mkDerivation {
@@ -60,6 +59,7 @@
             mkdir -p $out/
             mkdir $out/lua
 
+            cp ${effil-win32}/effil.dll $out/
             cp ${luajit-win32}/bin/lua51.dll $out/
             cp ${luasec-win32}/lib/lua/5.1/ssl.dll $out/
             cp -r ${luasec-win32}/share/lua/5.1/* $out/lua/
