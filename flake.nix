@@ -56,17 +56,20 @@
           phases = [ "installPhase" ];
 
           installPhase = ''
-            mkdir -p $out/
+            mkdir $out/
             mkdir $out/lua
 
-            cp ${effil-win32}/effil.dll $out/
-            cp ${luajit-win32}/bin/lua51.dll $out/
-            cp ${luasec-win32}/lib/lua/5.1/ssl.dll $out/
-            cp -r ${luasec-win32}/share/lua/5.1/* $out/lua/
-            cp -r ${luasocket-win32}/lua/5.1/* $out/
+            cp --no-preserve=mode ${effil-win32}/effil.dll $out/
+            cp --no-preserve=mode ${luajit-win32}/bin/lua51.dll $out/
+            cp --no-preserve=mode ${luasec-win32}/lib/lua/5.1/ssl.dll $out/
+            cp --no-preserve=mode -r ${luasec-win32}/share/lua/5.1/* $out/lua/
+            cp --no-preserve=mode -r ${luasocket-win32}/lua/5.1/* $out/
 
-            cp ${tools}/bin/libkotldr.dll $out/kotldr.dll
-            cp ${tools}/bin/run_n_gun_32.exe $out/
+            cp --no-preserve=mode ${tools}/bin/libkotldr.dll $out/kotldr.dll
+            cp --no-preserve=mode ${tools}/bin/run_n_gun_32.exe $out/
+
+            find $out/ -type f \( -name '*.dll' -o -name '*.exe' \) \
+              -exec strip {} \;
           '';
         };
       in
