@@ -2,7 +2,7 @@
 , lib
 , lua5_1
 , luasocket
-, openssl
+, openssl_3_2
 , stdenv
 , ...
 }:
@@ -21,7 +21,7 @@ stdenv.mkDerivation rec {
   buildInputs = [
     lua5_1
     luasocket
-    openssl
+    openssl_3_2
   ];
 
   buildFlags = [
