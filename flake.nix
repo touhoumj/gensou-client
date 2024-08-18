@@ -90,9 +90,6 @@
             cp --no-preserve=mode -r ${lua-websockets}/lua/* $out/deps/lua/
             cp --no-preserve=mode -r ${gensou}/lua/* $out/deps/lua/
 
-            cp --no-preserve=mode ${thmj4n-tools}/bin/libkotldr.dll $out/kotldr.dll
-            cp --no-preserve=mode ${thmj4n-tools}/bin/run_n_gun_32.exe $out/
-
             find $out/ -type f \( -name '*.dll' -o -name '*.exe' \) \
               -exec strip {} \;
           '';
