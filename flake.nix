@@ -30,6 +30,25 @@
           luasocket = self.packages.${system}.luasocket-win32;
         };
 
+        packages.lua-cbor = pkgs.callPackage ./nix/pkgs/lua-cbor.nix { };
+
+        packages.mediator = pkgs.callPackage ./nix/pkgs/mediator.nix { };
+
+        packages.lua-websockets =
+          pkgs.callPackage ./nix/pkgs/lua-websockets.nix { };
+
+        packages.gensou = pkgs.stdenv.mkDerivation {
+          pname = "gensou";
+          version = "0.1.0";
+
+          src = nix-filter { root = "${self}/src"; };
+
+          installPhase = ''
+            mkdir $out
+            cp --no-preserve=mode -r . $out/lua
+          '';
+        };
+
         packages.thmj4n-tools = pkgs.stdenv.mkDerivation {
           pname = "thmj4n-tools";
           version = "1.0.0";
@@ -59,14 +78,17 @@
           phases = [ "installPhase" ];
 
           installPhase = with self.packages.${system}; ''
-            mkdir $out/
-            mkdir $out/lua
+            mkdir -p $out/deps/lua
 
-            cp --no-preserve=mode ${effil-win32}/effil.dll $out/
             cp --no-preserve=mode ${luajit-win32}/bin/lua51.dll $out/
-            cp --no-preserve=mode ${luasec-win32}/lib/lua/5.1/ssl.dll $out/
-            cp --no-preserve=mode -r ${luasec-win32}/share/lua/5.1/* $out/lua/
-            cp --no-preserve=mode -r ${luasocket-win32}/lua/5.1/* $out/
+            cp --no-preserve=mode ${effil-win32}/effil.dll $out/deps/
+            cp --no-preserve=mode ${luasec-win32}/lib/lua/5.1/ssl.dll $out/deps/
+            cp --no-preserve=mode -r ${luasec-win32}/share/lua/5.1/* $out/deps/lua/
+            cp --no-preserve=mode -r ${luasocket-win32}/lua/5.1/* $out/deps/
+            cp --no-preserve=mode -r ${lua-cbor}/lua/* $out/deps/lua/
+            cp --no-preserve=mode -r ${mediator}/lua/* $out/deps/lua/
+            cp --no-preserve=mode -r ${lua-websockets}/lua/* $out/deps/lua/
+            cp --no-preserve=mode -r ${gensou}/lua/* $out/deps/lua/
 
             cp --no-preserve=mode ${thmj4n-tools}/bin/libkotldr.dll $out/kotldr.dll
             cp --no-preserve=mode ${thmj4n-tools}/bin/run_n_gun_32.exe $out/
