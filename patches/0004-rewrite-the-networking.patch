@@ -1,0 +1,1650 @@
+From df2a15d86e4fd286e0711e7ca313f0d0f17f1d8e Mon Sep 17 00:00:00 2001
+From: Chinpo Nya <czen+github@honk.li>
+Date: Sun, 18 Aug 2024 18:15:30 +0200
+Subject: [PATCH 4/4] rewrite the networking
+
+---
+ BOOT.LUA                    |  72 +++++----
+ S/LIB/SOCKET.LUA            |   2 +-
+ S/SCENE/GAME.LUA            |   1 +
+ S/SCENE/GAME/00_LOADING.LUA |  38 ++---
+ S/SCENE/GAME/03_HAIPAI.LUA  |   4 -
+ S/SCENE/GAME/92_FINISH.LUA  |   8 +-
+ S/SCENE/GAME/STANDBY.LUA    |  21 +--
+ S/SCENE/MULTI.LUA           | 172 ++++++++--------------
+ S/SCENE/MULTI/LOBBY.LUA     | 127 ++++++++--------
+ S/SCENE/MULTI/WAIT.LUA      | 282 ++++++++++++++++--------------------
+ S/SCENE/NETWORK.LUA         | 270 +++++-----------------------------
+ S/SCENE/SUBMENU/QUIT.LUA    |  10 +-
+ S/SCENE/TELOP.LUA           |  95 ++++--------
+ S/SCENE/TITLE.LUA           |   2 -
+ 14 files changed, 370 insertions(+), 734 deletions(-)
+
+diff --git a/BOOT.LUA b/BOOT.LUA
+index b324bf0..1fe6203 100644
+--- a/BOOT.LUA
++++ b/BOOT.LUA
+@@ -7,6 +7,27 @@
+ 
+ ]]
+ 
++package.path = ".\\deps\\lua\\?.lua;" .. package.path
++package.cpath = ".\\deps\\?.dll;" .. package.cpath
++
++-- Make cbor available everywhere for comparisons against cbor.null
++cbor = require("cbor")
++gensou = require("gensou")
++require("gensou.scene")
++
++-- TODO remove in release
++local log_row_id = 0;
++local log_file = io.open("debug.log", "w")
++io.write("")
++
++function _dm(arg)
++	-- print(arg)
++	local log_file = io.open("debug.log", "a")
++	log_file:write("["..tostring(log_row_id).."] "..arg.."\n")
++	log_file:close()
++	log_row_id = log_row_id+1
++end
++
+ -------------------------------------------
+ -- common呼び出し
+ -------------------------------------------
+@@ -194,7 +215,12 @@ function OnLoad()
+ 	os.setlocale("English_America.932", "time");
+ 	--_dm("os.setlocale;"..tostring( os.setlocale("English_America.932", "time") ) );
+ 	--_dm( "now:"..os.date( "!%a, %d %b %Y %H:%M:%S GMT", 1235706461) );
+-	setWindowCaption("東方幻想麻雀 4N+");
++	local m={};
++	for w in string.gmatch(loadFile("version.txt"),"[0-9]+") do
++		table.insert(m,w+0);
++	end
++	__compileTimeStamp = string.format("%4d%02d%02d%02d%02d%02d",m[2],m[3],m[4],m[5],m[6],m[7]);
++	setWindowCaption(string.format("Touhou Gensou Mahjong 4N Ver.%4d%02d%02d",m[2],m[3],m[4]));
+ 	--setWindowCaption(os.setlocale(nil, "all"))
+ end
+ 
+@@ -227,8 +253,11 @@ function boot_OnStart()
+ 	loadSavedata();
+ 	initAchievement();
+ 	loadAchievement();
+-	
++
++	-- TODO remove in release
+ 	SCENES.websocket = addScene("websocket");
++
++	SCENES.gensou = addScene("gensou");
+ 	
+ 	startLoaderThread("prior_initializer");
+ end
+@@ -255,43 +284,10 @@ end
+ -- OnVanish アプリ終了直前に呼ばれる
+ -------------------------------------------
+ function OnVanish(cause)
+-	if(Socket ~= nil)then
+-		if(Socket.roomnum ~= nil and not REPLAYMODE)then
+-			local send = {
+-				roomnum = Socket.roomnum;
+-				pass = Socket.roompassword;
+-				pin = SERIAL:get("pin");
+-				hash = md5string(SERIAL:get("pin"));
+-				gamever = GAME_VER;
+-				vdate = __compileTimeStamp;
+-			};
+-			if(bNetwork)then
+-				send.func = "game_leave";
+-			else
+-				send.func = "room_leave";
+-			end
+-			
+-			local res = {
+-				connect = -1;
+-				send = -1;
+-				recv = -1;
+-			};
+-			Socket:query("/index.php", send, false, "POST");
+-			for i=0,600 do
+-				if(res.connect ~= 0)then
+-					res.connect = Socket.socket:connect(Socket.host, Socket.port);
+-				elseif(res.connect == 0 and res.send ~= 0)then
+-					res.send = Socket.socket:send();
+-				elseif(res.send == 0 and res.recv ~= 0)then
+-					res.recv = Socket.socket:recv();
+-				elseif(res.recv == 0)then
+-					break;
+-				end
+-				sleep(1);
+-			end
+-		end
++	if(WSCLIENT ~= nil) then
++		gensou_OnClose()
+ 	end
+-	
++
+ 	_dm("TASK_ID : "..tostring(TASK_ID));
+ 	printnode(TASK);
+ 	deleteAllGraphic(G);	-- グラフィック削除
+diff --git a/S/LIB/SOCKET.LUA b/S/LIB/SOCKET.LUA
+index a742ba2..93dc762 100644
+--- a/S/LIB/SOCKET.LUA
++++ b/S/LIB/SOCKET.LUA
+@@ -78,7 +78,7 @@ TCPBASE = {
+ 
+ 		self.uuid = getUUID();
+ 		
+-_dm( string.format("query[%s]<br>%s<br>\n", self.uuid, table.concat(send, "<br>\n")));
++_dm( string.format("query[%s] %s\n", self.uuid, table.concat(send, "\n")));
+ 
+ 		self.stream = table.concat(send, "\r\n");
+ 		self.socket:setStream( self.stream );
+diff --git a/S/SCENE/GAME.LUA b/S/SCENE/GAME.LUA
+index 3040af9..d58179a 100644
+--- a/S/SCENE/GAME.LUA
++++ b/S/SCENE/GAME.LUA
+@@ -238,6 +238,7 @@ function game_setoffset(x)
+ 	end
+ end
+ 
++-- never used
+ function f_game_leave()
+ 	_dm("f_game_leave");
+ 
+diff --git a/S/SCENE/GAME/00_LOADING.LUA b/S/SCENE/GAME/00_LOADING.LUA
+index 17e0aaa..286f222 100644
+--- a/S/SCENE/GAME/00_LOADING.LUA
++++ b/S/SCENE/GAME/00_LOADING.LUA
+@@ -1,30 +1,21 @@
+ -- ロード待ちとカットイン表示
+ function t_game_cutin()
+-	local loadwait = {};
+-	for i=1,#SEAT do
+-		loadwait[i] = 0;
++	for i,v in pairs(SEAT)do
++		if(v.trip=="CPU" or v.playertype == "cpu" or REPLAYMODE)then --SAVEREPLAY
++			v.loading = "loaded";
++		else
++			v.loading = v.loading or "not_loading"
++		end
+ 	end
+-	
++
+ 	-- ネットワークで無い場合は待たずに先に進む
+ 	LATEST_TASKTIME = os.time();
+ 	if(bNetwork or REPLAYMODE)then
+ 		while(1)do
+-			for i,v in pairs(SEAT)do
+-				if(v.trip=="CPU" or v.playertype == "cpu" or REPLAYMODE)then --SAVEREPLAY
+-					loadwait[ v.index ] = 100;
+-				elseif(loadwait[ v.index ] ~= 100)then
+-					local filename = "/rooms/"..__compileTimeStamp.."/"..Socket.roomnum.."/".."loading_"..v.hash;
+-					local result, body = POSTSend(Socket, filename, nil, "GET");
+-					if(result == 0)then
+-						loadwait[ v.index ] = tonumber(body[1]);
+-					end
+-				end
+-			end
+-			
+ 			-- 誰かひとりでもfalseがいたら抜けない
+ 			local res = true;
+-			for i,v in pairs(loadwait)do
+-				if(v < 100)then
++			for i,v in pairs(SEAT)do
++				if(v.loading ~= "loaded")then
+ 					res = false;
+ 				end
+ 			end
+@@ -51,6 +42,15 @@ function t_game_cutin()
+ 	
+ 	--NEXT_THREAD = "t_game_init";
+ 	t_game_init();
+-	
+ end
+ 
++function handle_loading_state(event)
++	for i, v in pairs(SEAT) do
++		if v.hash == event.data.id then
++			_dm(string.format("[info] player '%s' (id:%s) changed loading state: %s", v.name, event.data.id, event.data.loading))
++			v.loading = event.data.loading
++			return
++		end
++	end
++	_dm(string.format("[warning] player '%s' (id:%s) is not in game but changed loading state: %s", v.name, event.data.id, event.data.loading))
++end
+diff --git a/S/SCENE/GAME/03_HAIPAI.LUA b/S/SCENE/GAME/03_HAIPAI.LUA
+index f881f40..9525b51 100644
+--- a/S/SCENE/GAME/03_HAIPAI.LUA
++++ b/S/SCENE/GAME/03_HAIPAI.LUA
+@@ -148,10 +148,6 @@ function t_game_ready()
+ 
+ 	submenus_enable()
+ 
+-	if(bNetwork)then
+-		NET_THREAD = "TaskUpdate";
+-	end
+-	
+ 	GAMELOG:start();
+ 	
+ 	CURRENT_SEAT = SEAT[ TAKU.oya_index ];
+diff --git a/S/SCENE/GAME/92_FINISH.LUA b/S/SCENE/GAME/92_FINISH.LUA
+index bf76ad2..e26e6f7 100644
+--- a/S/SCENE/GAME/92_FINISH.LUA
++++ b/S/SCENE/GAME/92_FINISH.LUA
+@@ -40,13 +40,7 @@ _dm("t_game_finish");
+ 		local name = SAVEDATA.net_character_name_4n;
+ 		SAVEDATA["unlock_"..name] = SAVEDATA["unlock_"..name] + 1;
+ 
+-		local query = {
+-			func = "game_finish";
+-			roomnum = Socket.roomnum;
+-			snum = Socket.snum;
+-			pass = Socket.roompassword;
+-		}
+-		result, body = POSTSend(Socket, "/index.php", query);
++		gensou.finish_game(WSCLIENT)
+ 
+ 	end
+ 	
+diff --git a/S/SCENE/GAME/STANDBY.LUA b/S/SCENE/GAME/STANDBY.LUA
+index cbfc04b..9d17b88 100644
+--- a/S/SCENE/GAME/STANDBY.LUA
++++ b/S/SCENE/GAME/STANDBY.LUA
+@@ -724,25 +724,18 @@ function isLoaderState()
+ 	end
+ 
+ 	scene_FadeZoomInOutProcInGame(1.8,1,0,255,20,"easeInQuad",{LAYER_POPUP});
+-	local query = {
+-		roomnum = Socket.roomnum;
+-		pass = Socket.roompassword;
+-		func = "game_loading";
+-		hash = md5string(SERIAL:get("pin"));
+-		loading = 1;
+-	};
+-	local result, body;
++
++	local begun_loading = false
+ 	while(isLoaderRunning())do
+-		if(bNetwork)then
+-			result, body = POSTSend(Socket, "/index.php", query);
++		-- FIXME this feels pointless
++		if(bNetwork and not begun_loading)then
++			local success = gensou.update_loading_state(WSCLIENT, {state="loading"})
++			begun_loading = success == true
+ 		end
+ 		wait(1);
+ 	end
+ 	if(bNetwork)then
+-		query.loading = 100;
+-		repeat
+-			result, body = POSTSend(Socket, "/index.php", query);
+-		until(result == 0);
++		gensou.update_loading_state(WSCLIENT, {state="loaded"})
+ 	end
+ 	wait(60);
+ 
+diff --git a/S/SCENE/MULTI.LUA b/S/SCENE/MULTI.LUA
+index 62d8e70..80f5948 100644
+--- a/S/SCENE/MULTI.LUA
++++ b/S/SCENE/MULTI.LUA
+@@ -195,11 +195,7 @@ function quick_create()
+ 	return true, body[2];
+ end
+ 
+-function room_join()
+-	if(type(Socket.roomnum) ~= "number")then
+-		return false, "ROOM_NOTNUMBER";
+-	end
+-
++function join_room()
+ 	-- 部屋に入る
+ 	-- ４では表示する戦績は「現在の所持点数：インターネット対戦回数」になるので、計算式を削りました
+ 	local pdata = PERSONALDATA[ PLAYER_MAX_NUM-2 ].on;
+@@ -208,140 +204,96 @@ function room_join()
+ 	local avg = __iavg(pdata.place1 *1.0 + pdata.place2 *2.0 +
+ 						pdata.place3 *3.0 + pdata.place4 *4.0 , 
+ 						totalgames_overall);
+-	local query = {
+-		roomnum = Socket.roomnum;
+-		pass = Socket.roompassword;
+-		func = "room_join";
+ 
+-		name = SERIAL:get("name");
+-		namequote = string.format('%q', SERIAL:get("name"));
+-		mode = Socket.mode;
+-		chara_id = SAVEDATA.net_character_name_4n;
+-		chara_skin = SAVEDATA.net_skin_index_4n;
+-		chrhash = SAVEDATA.net_character_name_4n.. tostring(SAVEDATA.net_skin_index_4n);
+-		hash = md5string(SERIAL:get("pin"));
+-		--star = archGetStarPoint();
+-		trip = maketrip( md5string(SERIAL:get("pin")) );
+-		places = string.format("%d games  %dpt  %d wins",
+-			totalgames_overall,
+-			SAVEDATA[ star_index[MULTI_ROOM_CREATE_VARS.length] ],
+-			pdata.place1
+-			);
+-		titletext = SAVEDATA.title_string;
+-		titletype = SAVEDATA.title_type;
++	local payload = {
++		id = Socket.roomnum,
++		password = Socket.roompassword,
++		mode = Socket.mode, -- ???
++		player = {
++			id = md5string(SERIAL:get("pin")),
++			name = SERIAL:get("name"),
++			trip = maketrip(md5string(SERIAL:get("pin"))),
++			title_text = SAVEDATA.title_string,
++			title_type = SAVEDATA.title_type,
++			character_id = SAVEDATA.net_character_name_4n;
++			character_skin = SAVEDATA.net_skin_index_4n;
++			stats = {
++				total_games = total_games_overall,
++				points = SAVEDATA[ star_index[MULTI_ROOM_CREATE_VARS.length] ],
++				wins = pdata.place1
++			},
++		},
+ 	}
+-	local result, body = POSTSend(Socket, "/index.php", query);
+-
+-	if(result == 0 and type(body) == "table")then
+-		if(body[1] ~= "OK" and body[1] ~= "room join.")then
+-			return false, table.concat(body, "\n");
+-		else
+-			_dm("Socket.roomstatus:"..tostring(Socket.roomstatus));
+-			return true;
+-		end
+-	end
+ 
+-	-- 失敗したのでタイトルに戻る
+-	_dm("room_join failed.");
+-	return false, "ROOM_JOIN_FAILED";
++	return gensou.join_room(WSCLIENT, payload)
+ end
+ 
++function handle_join_room(event)
++	if event.success then
++		NEXT_THREAD = "t_multi_room_wait"
++	else
++		show_ingamepopup("Failed to enter the room.\n"..event.error)
++	end
++end
+ 
+-function room_create()
++function create_room()
+ 	-- 部屋の作成
+ 	Socket.roomnum = nil;
+ 
+ 	-- 部屋に入る
+-	local query = {};
+-	query.pass = MULTI_ROOM_CREATE_VARS.roompassword;
+-	query.func = "room_create";
+-	if(MULTI_ROOM_CREATE_VARS.quickaccept)then
+-		MULTI_ROOM_CREATE_VARS.roompassword = "";
+-		query.pass = "";
+-	end
++	local payload = {
++		name = MULTI_ROOM_CREATE_VARS.roomname,
++		description = MULTI_ROOM_CREATE_VARS.roomcomment,
++		time = MULTI_ROOM_CREATE_VARS.time,
++		table_name = MULTI_ROOM_CREATE_VARS.takuname,
++		game_length = MULTI_ROOM_CREATE_VARS.length,
++		enable_magic = MULTI_ROOM_CREATE_VARS.usemagic,
++		password = MULTI_ROOM_CREATE_VARS.roompassword,
++		has_password = false,
++		allow_quick_join = MULTI_ROOM_CREATE_VARS.quickaccept
++	}
+ 
+-	if(MULTI_ROOM_CREATE_VARS.roompassword ~= "")then
+-		MULTI_ROOM_CREATE_VARS.password=true;
+-	else
+-		MULTI_ROOM_CREATE_VARS.password=false;
++	if (payload.allow_quick_join) then
++		payload.has_password = false 
++		payload.password = nil
++	elseif (payload.password ~= "") then
++		payload.has_password = true
+ 	end
+-	Socket.roompassword = MULTI_ROOM_CREATE_VARS.roompassword;
++
+ 	MULTI_ROOM_CREATE_VARS.roompassword = nil;
+-	
+-	local room_index = MULTI_ROOM_CREATE_VARS.takuindex;
+ 	MULTI_ROOM_CREATE_VARS.takuindex = nil;
+ 
+-	local data = serialize(MULTI_ROOM_CREATE_VARS);
+-	for i,v in pairs(MULTI_ROOM_CREATE_VARS)do
+-		if(type(v) == "table")then
+-			query[i] = serialize(v);
+-		else
+-			query[i] = v;
+-		end
++	return gensou.create_room(WSCLIENT, payload)
++end
++
++function handle_create_room(event)
++	if (not event.success) then
++		show_ingamepopup("Failed to create the room.\n"..event.error)
++		return
+ 	end
+ 
+-	local result, body = POSTSend(Socket, "/index.php", query);
+-	if(result == 0 and type(body) == "table")then
+-		if(body[1] == "ok.")then
+-			Socket.roomnum = body[2];
+-			Socket.gamenum = 1;
++	Socket.roomnum = event.data.id;
++	Socket.gamenum = 1;
+ 
+-			PLAYER_MAX_NUM = _PLAYER_NUM_TABLE[ MULTI_ROOM_CREATE_VARS.length ];
+-			return true, body[2];
+-		end
++	local sent_successfully = join_room();
++	if(not sent_successfully)then
++		show_ingamepopup("Failed to enter the room.\nCommunication error.")
+ 	end
+-	return false, table.concat(body, "\n");
+-
+ end
+ 
+-
+-function room_standby( flag )
++function update_readiness(flag)
+ 	if( type(flag) ~= "boolean" )then
+ 		flag = false;
+ 	end
+ 	
+-	local query = {
+-		roomnum = Socket.roomnum;
+-		pass = Socket.roompassword;
+-		func = "room_standby";
+-		hash = md5string(SERIAL:get("pin"));
+-		standby = flag;
++	local payload = {
++		player_id = md5string(SERIAL:get("pin"));
++		ready = flag;
+ 	};
+-	
+-	local result, body = POSTSend(Socket, "/index.php", query);
+-	if(result == 0 and type(body) == "table")then
+-		if(body[1] == "ok.")then
+-			return true;
+-		else
+-			-- 失敗したのでタイトルに戻る
+-			return false, table.concat(body, "\n");
+-		end
+-	end
+-	return false, "";
+-	
+-end
+ 
+-_LATEST_REFRESH = os.time();
+-function room_refresh()
+-	if(os.time() - _LATEST_REFRESH < 2)then
+-		return;
+-	end
+-
+-	-- 対局室情報を最新のものにする
+-	local query = {
+-		pin = SERIAL:get("pin");
+-		hash = md5string(SERIAL:get("pin"));
+-		roomnum = Socket.roomnum;
+-		func = "room_refresh";
+-	}
+-	local result, body = POSTSend(Socket, "/index.php", query);
+-
+-	_LATEST_REFRESH = os.time();
+-	
++	return gensou.update_readiness(WSCLIENT, payload)
+ end
+ 
+-
+-
+ function __avg(a,b)
+ 	local ans =0
+ 	if(b~=0)then
+diff --git a/S/SCENE/MULTI/LOBBY.LUA b/S/SCENE/MULTI/LOBBY.LUA
+index d0882e5..b0bc2a0 100644
+--- a/S/SCENE/MULTI/LOBBY.LUA
++++ b/S/SCENE/MULTI/LOBBY.LUA
+@@ -42,14 +42,12 @@ function t_multi_lobby()
+ 		filter = 0; --フィルタ 0=ALL,1=東風 2=半荘 3=三麻
+ 		filtermagic = nil; --フィルタ nil=(all) false or true
+ 	};
+-	local hresult = multi_lobby_fetchlist();
+-	
+-	multi_lobby_InitializeComponent ()
+ 
+-	if (hresult	== -1 )then
+-		setActorString(A.FormMultiSettings.lbListErrorDisplay,"There is no online room currently available.\nPlease wait for a while or create a room and wait for players to join.");
+-		addMover(A.FormMultiSettings.lbListErrorDisplay,-1,1,MOVER_SETALPHA,255);
+-	elseif(hresult == -2)then
++	multi_lobby_InitializeComponent()
++
++	local sent_successfully = gensou.join_lobby(WSCLIENT)
++
++	if (not sent_successfully) then
+ 		_dm("t_multi_lobby result false.");
+ 		show_ingamepopup("Communication failed.");
+ 		NEXT_SCENE = "title";
+@@ -64,12 +62,10 @@ function t_multi_lobby()
+ 	scene_FadeZoomInOutProc(0.5,1,0,255,15,"easeOutQuad",TITLE_LAYERS);
+ 	scene_ClearAffineFlag();
+ 	
+-	multi_lobby_updateList();
+-	
+ 	--メインループここから
+ 	
+ 	repeat
+-		while(_LOBBY.answer == 0)do
++		if(_LOBBY.answer == 0)then
+ 			if(getMouseW()>0)then
+ 				C.FormMultiSettings.lbRoomList.slave:AddValue(-20);
+ 			end
+@@ -87,7 +83,7 @@ function t_multi_lobby()
+ 			PLAYER_MAX_NUM = _PLAYER_NUM_TABLE[ it.length ];
+ 			if(it.password)then
+ 				--パスワードが必要な部屋。
+-				local s =t_multi_lobby_passwordentry();
++				local s = t_multi_lobby_passwordentry();
+ 				if(s~=nil) then
+ 					Socket.roompassword = s
+ 				else
+@@ -99,14 +95,12 @@ function t_multi_lobby()
+ 
+ 		-- 再度改めて判定を行う
+ 		if(_LOBBY.answer==1)then
+-			local result, error = room_join();
+-			if(result == false)then
+-				show_ingamepopup( "Failed to enter the room.\nPassword is probably wrong." ); -- TEST NICO ---- show_ingamepopup( error );
++			local sent_successfully = join_room()
++			_LOBBY.answer = 0;
++			if (not sent_successfully) then
++				-- show_ingamepopup( "Failed to enter the room.\nPassword is probably wrong." ); -- TEST NICO ---- show_ingamepopup( error );
++				show_ingamepopup("Failed to enter the room.\nCommunication error.")
+ 				Socket.roomnum = nil;
+-				_LOBBY.answer=0;
+-			else
+-				NEXT_THREAD = "t_multi_room_wait";
+-				break;
+ 			end
+ 		end
+ 		
+@@ -133,31 +127,16 @@ function t_multi_lobby()
+ 				MULTI_ROOM_CREATE_VARS.length = 3;
+ 			end
+ 			
+-			local result, param = room_create();
+-			if(result == false)then
++			local sent_successfully = create_room()
++			_LOBBY.answer = 0
++			if(not sent_successfully)then
+ 				-- 失敗したのでタイトルに戻る
+-				show_ingamepopup( param );
+-				NEXT_SCENE = "title";
+-				break;
++				show_ingamepopup("Failed to enter the room.\nCommunication error.")
++				NEXT_SCENE = "title"
++				break
+ 			end
+ 
+-			Socket.roomnum = tonumber(param);
+-			Socket.gamenum = 1;
+ 			PLAYER_MAX_NUM = _PLAYER_NUM_TABLE[ MULTI_ROOM_CREATE_VARS.length ];
+-
+-			result, param = room_join();
+-			if(result == false)then
+-				-- 失敗したのでタイトルに戻る
+-				show_ingamepopup( param );
+-				_LOBBY.answer = 0;
+-			else
+-				-- 認証状態ならツイッターに投稿する。
+-				if(isTwitter() and MULTI_ROOM_CREATE_VARS.tweetflag)then
+-					local msg,tweetvar = multi_create_twitter_string();
+-					twitterUpdate( msg );
+-				end
+-				NEXT_THREAD = "t_multi_room_wait";
+-			end
+ 		end
+ 		
+ 		if(_LOBBY.answer<0)then
+@@ -165,6 +144,9 @@ function t_multi_lobby()
+ 			break;
+ 		end
+ 	until(NEXT_THREAD ~= nil); 
++
++	gensou.leave_lobby(WSCLIENT)
++
+ 	scene_FadeZoomInOutProc(1,.80,255,0,20,"easeInQuad",TITLE_LAYERS);
+ 	cls(AGT.L_WINDOW)
+ 	cls(AGT.L_STATIC);
+@@ -178,36 +160,48 @@ _LOBBY_JROOMSTATUS = {
+ 	["waiting"] = "";
+ };
+ 
+-function multi_lobby_fetchlist()
+-	
+-	local send = {
+-		func = "net_lobby";
+-	}
+-	local result, body = POSTSend(Socket, "/index.php", send);
+-	if(result == 0 and type(body) == "table")then
+-	else
+-		return -2;
++function handle_join_lobby(event)
++	if (not event.success) then
++		return
+ 	end
+-	
+-	if(type(body) ~= "table" or body == nil)then
+-		return -1;
++
++	handle_lobby_changed(event)
++end
++
++function handle_lobby_changed(event)
++	if not _LOBBY then
++		-- Guard against situations where we receive a lobby list update
++		-- but the lobby view hasn't been initialized.
++		return
+ 	end
+-	local b = table.concat(body, "\r\n");
+-	if(#b < 1)then
+-		_LOBBY.rooms_orig = {};
+-		_LOBBY.rooms = {};
+-		return -1;
++
++	local rooms = {}
++	for i, v in ipairs(event.data.rooms) do
++		local room = {
++			roomnum = v.id,
++			time = v.time,
++			roomname = v.name,
++			length = v.game_length,
++			takuname = v.table_name,
++			usemagic = v.enable_magic,
++			roomcomment = v.description == cbor.null and "" or v.description,
++			password = v.has_password,
++			status = v.status,
++			playercount = v.player_count
++		}
++		table.insert(rooms, room)
+ 	end
+-	local room_vars_orig = parseCsv( table.concat(body, "\r\n"), true);
+-	-- _dm("room_vars_orig");	printnode(room_vars_orig);
+ 
+-	_LOBBY.rooms_orig = room_vars_orig;
+-	_LOBBY.rooms = clone_table_r(room_vars_orig);
+-	
++	_LOBBY.rooms_orig = rooms
++	_LOBBY.rooms = clone_table_r(rooms)
++	multi_lobby_updateList()
+ end
+ 
+ 
+ function multi_lobby_updateList ()
++	if (type(C.FormMultiSettings) ~= "table") then
++		return
++	end
+ 	_LOBBY.rooms={};
+ 	if(type(_LOBBY.rooms_orig) == "table")then
+ 		for i,v in pairs(_LOBBY.rooms_orig)do
+@@ -479,19 +473,16 @@ function multi_lobby_lbRoomList_DrawItem(self,args)
+ end
+ 
+ function multi_lobby_btRefresh_Click(self,args)
+-	local hresult = multi_lobby_fetchlist();
+-	if (hresult	== -1 )then
+-		setActorString(A.FormMultiSettings.lbListErrorDisplay,"There is no online room currently available.\nPlease wait for a while or create a room and wait for players to join.");
+-		addMover(A.FormMultiSettings.lbListErrorDisplay,-1,1,MOVER_SETALPHA,255);
+-	elseif(hresult == -2)then
++	local sent_successfully = gensou.join_lobby(WSCLIENT);
++
++	if (not sent_successfully) then
+ 		_dm("t_multi_lobby result false.");
+ 		show_ingamepopup("Communication failed.");
+ 		_LOBBY.answer=-1;
+ 		return;
+ 	end
+-	addMover(A.FormMultiSettings.lbListErrorDisplay,-1,1,MOVER_SETALPHA,0);
+-	multi_lobby_updateList(_LOBBY.filter);	
+ 
++	addMover(A.FormMultiSettings.lbListErrorDisplay,-1,1,MOVER_SETALPHA,0);
+ end
+ 
+ function multi_lobby_tbRoomName_StartEdit(self,args)
+diff --git a/S/SCENE/MULTI/WAIT.LUA b/S/SCENE/MULTI/WAIT.LUA
+index eb5f25a..4febcc0 100644
+--- a/S/SCENE/MULTI/WAIT.LUA
++++ b/S/SCENE/MULTI/WAIT.LUA
+@@ -57,9 +57,10 @@
+ ]]
+ 
+ function t_multi_room_wait()
+-
+ 	--マルチプレイのスタート最低人数(デバッグ時のみ1人でも開始OKとする1)
+ 	MINIMUM_START_PLAYERS = 2;
++	-- TODO remove this in release
++	MINIMUM_START_PLAYERS = 1;
+ 	if (_DEBUG)then
+ 		MINIMUM_START_PLAYERS = 1;
+ 	end
+@@ -94,34 +95,70 @@ function t_multi_room_wait()
+ 
+ 	scene_FadeZoomInOutProc2(0.5,1,0,255,15,"easeOutQuad",TITLE_LAYERS);
+ 	-- 各種機能は関数にまとめることにしました
+-	local mine = multi_wait_room_refresh();
++
++	local pin_hash = md5string(SERIAL:get("pin"));
+ 
+ 	_MULTI_WAIT_ANSWER = 0;
+ 	local ring = #PLAYER_LIST;
+ 	while _MULTI_WAIT_ANSWER==0 do
++		if (ROOM_OWNER ~= nil and ROOM_OWNER.hash == pin_hash)then
++			C.FormNetworkWait.btStartGame.visible=true;
++			C.FormNetworkWait.btStartGame.enabled=false;
++			C.FormNetworkWait.btReady.visible=false;
++			if (#PLAYER_LIST < MINIMUM_START_PLAYERS)then
++				-- ゲーム開始をキャンセル
++				FORCESTART_TIME = -1;
++				setActorString(A.FormNetworkWait.lbwaitsec, "");
++			elseif (FORCESTART_TIME < 0)then
++				--オーナーになった場合
++				FORCESTART_TIME = os.time() + 60;
++				--ルームオーナーは強制的に準備NGとなる
++				update_readiness(false);
++			end
++
++			if ((#PLAYER_LIST)>=MINIMUM_START_PLAYERS) then
++				local ctr = #PLAYER_LIST;
++				for i=2,#PLAYER_LIST do
++					if (PLAYER_LIST[i].standby) then
++						ctr=ctr-1;
++					end
++				end
++				--自分一人以外準備完了中ならボタンを押せる
++				local time = FORCESTART_TIME - os.time();
++				local waitsec = "";
++				C.FormNetworkWait.btStartGame.enabled = ((ctr==1) or (time <= 0));
++				if(not C.FormNetworkWait.btStartGame.enabled)then
++					waitsec = string.format("Forced start will be possible in \acffccccff%s\acffffffff seconds.", time);
++				end
++				setActorString(A.FormNetworkWait.lbwaitsec, waitsec);
++			end
++		else
++			-- オーナーではないので表示を消す
++			C.FormNetworkWait.btStartGame.enabled = false;
++			setActorString(A.FormNetworkWait.lbwaitsec, "");
++		end
++
+ 		if (not C.FormNetworkWait.btStartGame.visible)then
+ 			setActorString(A.FormNetworkWait.lbwaitsec, "");
+ 		end
+ 
+-		if (getSceneUptime() % 15 == 1)then
+-			mine = multi_wait_room_refresh();
+-			if (type(mine) ~= "table")then
+-				_dm("t_multi_room_wait mine error.*********************************************************");
+-			elseif (type(mine.standby) ~= "boolean" )then
+-				_dm("t_multi_room_wait mine.standby is not 'boolean'.*********************************************************");
+-			elseif (C.FormNetworkWait.btReady.requested_standby == mine.standby)then
+-				C.FormNetworkWait.btReady.standby = mine.standby;
+-				if (mine.standby)then
+-					C.FormNetworkWait.btReady.caption="Cancel";
+-				else
+-					C.FormNetworkWait.btReady.caption="Ready";
+-				end
+-				C.FormNetworkWait.btReady.enabled=true;
++		if (OWN_PLAYER_LOBBY_STATE == nil) then
++			C.FormNetworkWait.btReady.caption="..."
++			C.FormNetworkWait.btReady.enabled=false
++		elseif (type(OWN_PLAYER_LOBBY_STATE) ~= "table")then
++			_dm("t_multi_room_wait mine error.*********************************************************");
++		elseif (type(OWN_PLAYER_LOBBY_STATE.standby) ~= "boolean" )then
++			_dm("t_multi_room_wait mine.standby is not 'boolean'.*********************************************************");
++		elseif (C.FormNetworkWait.btReady.requested_standby == OWN_PLAYER_LOBBY_STATE.standby)then
++			C.FormNetworkWait.btReady.standby = OWN_PLAYER_LOBBY_STATE.standby;
++			if (OWN_PLAYER_LOBBY_STATE.standby)then
++				C.FormNetworkWait.btReady.caption="Cancel";
++			else
++				C.FormNetworkWait.btReady.caption="Ready";
+ 			end
+-			--TODO 対局準備ができたら_MULTI_WAIT_ANSWER = 1としてください。
+-		else
+-			wait(1);
++			C.FormNetworkWait.btReady.enabled=true;
+ 		end
++		--TODO 対局準備ができたら_MULTI_WAIT_ANSWER = 1としてください。
+ 
+ 		if(getMousePressCount(MOUSE_RIGHT) >= 60)then
+ 			setMusicMasterVolume(0); --MUTE
+@@ -152,16 +189,14 @@ function t_multi_room_wait()
+ 			end
+ 		end
+ 
++		wait(1)
++
+ 		AGT.DoEvents();
+ 	end
+ 	setMusicMasterVolume(CONFIG:get("bgm_vol")*10); --MUTE
+ 
+ 	if (_MULTI_WAIT_ANSWER>0)then
+ 		AGT.utils.DisableComponents();
+-		while(#PLAYER_LIST < MULTI_PLAYER_MAX)do
+-			-- なんかユーザー情報が足りないまま進行した事例があるので、ちゃんと全員分のデータが揃うまでループさせる
+-			multi_wait_room_refresh();
+-		end
+ 		addMover(A.FormNetworkWait.Prompt,-1,1,MOVER_SETFACE,G.multi.header.start);
+ 		bNetwork = true;
+ 		wait(180);
+@@ -182,119 +217,60 @@ function t_multi_room_wait()
+ 	clearLayerSettings();
+ end
+ 
+--- 部屋の状況を更新する
+-function multi_wait_room_refresh()
+-	room_refresh();
+-	
+-	local result, body = POSTSend(Socket, "/rooms/"..__compileTimeStamp.."/"..Socket.roomnum.."/info", nil, "GET");
+-	if (result == 0 and #body > 0)then
+-		local t_info = parseCsv( table.concat(body, "\r\n"), true);
+-		if(type(t_info)~="table")then
+-			return multi_wait_room_refresh();
+-		elseif(type(t_info[1])~="table")then
+-			return multi_wait_room_refresh();
+-		end
+-		MULTI_ROOM_CREATE_VARS.gamestart = t_info[1].gamestart;
+-	end
+-
+-	local result, body = POSTSend(Socket, "/rooms/"..__compileTimeStamp.."/"..Socket.roomnum.."/users", nil, "GET");
++function handle_game_start(event)
++	MULTI_ROOM_CREATE_VARS.gamestart = true
++end
+ 
+-	local mine;
+-	if (result == 0 and #body > 0)then
+-		PLAYER_LIST = {};
+-		local t_player = parseCsv( table.concat(body, "\r\n"), true);
+-		local owner;
+-		local pin_hash = md5string(SERIAL:get("pin"));
+-		for i,v in pairs(t_player)do
+-			local a = {
+-				sysname=v.chara_id;
+-				type="player";
+-				name = v.name;
+-				hash = v.hash;
+-				titletext = v.titletext;
+-				titletype = tonumber(v.titletype);
+-				skin_index = v.chara_skin;
+-				chrhash = tostring(v.chara_id)..tostring(v.chara_skin);
+-				desc = v.places;
+-				standby = v.standby;
+-				trip = v.trip;
+-			}
+-			if (i == 1)then
+-				owner = v;
+-			end
+-			if (v.hash == pin_hash)then
+-				a.type = "player";
+-				mine = a;
+-			elseif (v.trip == "CPU" and owner.hash==pin_hash)then
+-				a.type = "cpu";
+-			else
+-				a.type = "network";
+-			end
+-			table.insert(PLAYER_LIST, a);
++function handle_players_changed(event)
++	_dm("received player state event")
++	local pin_hash = md5string(SERIAL:get("pin"));
++
++	PLAYER_LIST = {}
++
++	for i,v in pairs(event.data)do
++		local places
++		if (v.trip ~= "CPU") then
++			places = string.format(
++				"%d games  %dpt  %d wins",
++				v.stats.total_games,
++				v.stats.points,
++				v.stats.wins	
++			)
++		else
++			places = "Computer"
+ 		end
+ 
+-		if (type(owner) ~= "table")then
+-			-- ownerが空なので再度データを取得する
+-			_dp("owner is nil!!!\n");
+-			return multi_wait_room_refresh();
+-		elseif (owner.hash==pin_hash)then
+-			C.FormNetworkWait.btStartGame.visible=true;
+-			C.FormNetworkWait.btStartGame.enabled=false;
+-			C.FormNetworkWait.btReady.visible=false;
+-			if (#PLAYER_LIST < MINIMUM_START_PLAYERS)then
+-				-- ゲーム開始をキャンセル
+-				FORCESTART_TIME = -1;
+-				setActorString(A.FormNetworkWait.lbwaitsec, "");
+-			elseif (FORCESTART_TIME < 0)then
+-				--オーナーになった場合
+-				FORCESTART_TIME = os.time() + 60;
+-				--ルームオーナーは強制的に準備NGとなる
+-				local result, error = room_standby(false);
+-			end
+-
+-			if ((#PLAYER_LIST)>=MINIMUM_START_PLAYERS) then
+-				local ctr = #PLAYER_LIST;
+-				for i=2,#PLAYER_LIST do
+-					if (PLAYER_LIST[i].standby) then
+-						ctr=ctr-1;
+-					end
+-				end
+-				--自分一人以外準備完了中ならボタンを押せる
+-				local time = FORCESTART_TIME - os.time();
+-				local waitsec = "";
+-				C.FormNetworkWait.btStartGame.enabled = ((ctr==1) or (time <= 0));
+-				if(not C.FormNetworkWait.btStartGame.enabled)then
+-					waitsec = string.format("Forced start will be possible in \acffccccff%s\acffffffff seconds.", time);
+-				end
+-				setActorString(A.FormNetworkWait.lbwaitsec, waitsec);
+-			end
++		local a = {
++			sysname=v.character_id;
++			type="player";
++			name = v.name;
++			hash = v.id;
++			titletext = v.title_text == cbor.null and "" or v.title_text;
++			titletype = v.title_type;
++			skin_index = v.character_skin;
++			chrhash = tostring(v.character_id)..tostring(v.character_skin);
++			desc = places;
++			standby = v.ready;
++			trip = v.trip;
++		}
++		if (i == 1)then
++			ROOM_OWNER = a;
++		end
++		if (a.hash == pin_hash)then
++			a.type = "player";
++			OWN_PLAYER_LOBBY_STATE = a;
++		elseif (a.trip == "CPU" and ROOM_OWNER.hash==pin_hash)then
++			a.type = "cpu";
+ 		else
+-			-- オーナーではないので表示を消す
+-			C.FormNetworkWait.btStartGame.enabled = false;
+-			setActorString(A.FormNetworkWait.lbwaitsec, "");
++			a.type = "network";
+ 		end
++		table.insert(PLAYER_LIST, a);
+ 	end
+-	return mine;
+ end
+ 
+ -- 部屋から退室する
+-function multi_wait_room_leave()
+-	local send = {
+-		func = "room_leave";
+-		roomnum = Socket.roomnum;
+-		pass = Socket.roompassword;
+-		hash = md5string(SERIAL:get("pin"));
+-	};
+-	result = -1;
+-	for i=1,10 do
+-		result, body = POSTSend(Socket, "/index.php", send);
+-		if (result == 0)then
+-			Socket.roomnum = nil;
+-			Socket.roompassword = nil;
+-			return true;
+-		end
+-	end
+-	return false;
++function leave_room()
++	return gensou.leave_room(WSCLIENT)
+ end
+ 
+ 
+@@ -377,23 +353,18 @@ end
+ function multi_wait_btReady_Click(self,args)
+ 	-- 準備が完了したらtrue, キャンセルする場合はfalseを渡す。
+ 	-- 戻り値がtrueなら通信成功、falseなら第2引数にエラーが入る
+-	self.enabled=false;
+-	local result, error = room_standby(not self.standby);
++	self.enabled = false;
++	local sent_successfully = update_readiness(not self.standby);
+ 	self.requested_standby = not self.standby;
+-	if(result == true)then
++	if(sent_successfully)then
+ 		-- PLAYER_LISTを更新する
+-		local mine;
+-		while(type(mine) ~= "table")do
+-			_dm("multi_wait_btReady_Click mine error.*********************************************************");
+-			mine = multi_wait_room_refresh();
+-		end
+-		if (self.requested_standby == mine.standby)then
++		if (self.requested_standby == OWN_PLAYER_LOBBY_STATE.standby)then
+ 			self.standby = mine.standby;
+-			if (mine.standby)then
++			if (OWN_PLAYER_LOBBY_STATE.standby)then
+ 				self.caption="Cancel";
+ 				self.overlaygraphic=G.icons[11];
+ 			else
+-				self.caption="蹴eady";
++				self.caption="Ready";
+ 				self.overlaygraphic=G.icons[10];
+ 			end
+ 			self.enabled=true;
+@@ -408,7 +379,7 @@ function multi_wait_btStartGame_Click(self,args)
+ 	-- 部屋主用のボタン。押した時点で空席にCPUを登録し、
+ 	-- ゲームを開始する。
+ 	srandMT();
+-	for i=1,MULTI_PLAYER_MAX do
++	for i=1+#PLAYER_LIST, MULTI_PLAYER_MAX do
+ 		local sysname = pick_random_from_table(CHARACTER_NAME);
+ 		if(_DEBUG and __MULTI_CPU_FIXED_ORDER~=nil and #__MULTI_CPU_FIXED_ORDER>=i)then
+ 			sysname = __MULTI_CPU_FIXED_ORDER[i];
+@@ -417,36 +388,29 @@ function multi_wait_btStartGame_Click(self,args)
+ 			end
+ 		end
+ 		local cpuchr = CHARACTER_DATA[sysname];
+-		local skinlist = CHARACTER_DATA[ sysname ].skinlist
++		local skinlist = CHARACTER_DATA[sysname].skinlist
+ 		local uuid = getUUID();
+-		local query = {
+-			roomnum = Socket.roomnum;
+-			pass = Socket.roompassword;
+-			func = "room_join";
++
++		local payload = {
++			id = md5string(uuid);
+ 			name = string.format("%s", cpuchr.name);
+-			mode = Socket.mode;
+-			chara_id = cpuchr.sysname;
+-			chara_skin = skinlist[ randMT(1,#skinlist) ];
+-			chrhash = string.format("%s%d", cpuchr.name, 1);
+-			pin = "CPU";
+-			hash = md5string(uuid);
+-			--star = archGetStarPoint();
+ 			trip = "CPU";
+-			places = string.format("Computer");
+-			titletext = "";
+-			titletype = 0;
++			title_text = nil;
++			title_type = 0;
++			character_id = cpuchr.sysname;
++			character_skin = skinlist[randMT(1,#skinlist)];
++			stats = {};
+ 		}
+-		local result, body = POSTSend(Socket, "/index.php", query);
++		gensou.add_cpu(WSCLIENT, payload)
+ 	end
+ 	--TODO 部屋主の開始指示はこれでいいのん？
+-	local result, error = room_standby(true);
+-	mine = multi_wait_room_refresh();
++	update_readiness(true);
+ end
+ 
+ function multi_wait_btBack_Click(self,args)
+ 	-- 戻り値がtrueなら通信成功、falseなら第2引数にエラーが入る
+-	local result, error = multi_wait_room_leave();
+-	if(result == true)then
++	local sent_successfully = leave_room();
++	if(sent_successfully == true)then
+ 		NEXT_THREAD = "t_multi_lobby";
+ 		PLAYER_LIST = {};
+ 		_MULTI_WAIT_ANSWER=-1;
+diff --git a/S/SCENE/NETWORK.LUA b/S/SCENE/NETWORK.LUA
+index c22697d..b39bbea 100644
+--- a/S/SCENE/NETWORK.LUA
++++ b/S/SCENE/NETWORK.LUA
+@@ -26,6 +26,7 @@ function network_init()
+ 	
+ end
+ 
++-- TODO remove this?
+ NET_THREAD = nil;
+ NET_FORCESTOP = false;
+ NET_UPTIME = 0;
+@@ -51,216 +52,37 @@ function checkPackage(md5)
+ 	return true, -1;
+ end
+ 
+-
+-function TaskUpdate()
+-	NET_FORCESTOP = false;
+-	
+-	local update_wait = 30;
+-	if(REPLAYMODE)then
+-		update_wait = 60;
+-	end
+-	
+-	while(1)do
+-		if(NET_FORCESTOP)then
+-			NET_FORCESTOP = false;
+-			return;
+-		elseif(bNetwork == false)then
+-			return;
+-		elseif(isLoaderRunning())then
+-		elseif(getSceneUptime() % update_wait == 1)then
+-			if(not REPLAYMODE)then
+-				local send = {
+-					func = "game_taskcheck";
+-					seat = Socket.index;
+-					roomnum = Socket.roomnum;
+-					taskfile = filename;
+-					pass = Socket.roompassword;
+-					hash = md5string(SERIAL:get("pin"));
+-				};
+-				local result, body = POSTSend(Socket, "/index.php", send);
+-				if(result == 0 and #body > 0)then
+-					-- leaveしたプレイヤーのハッシュが存在するので離脱処理を行う
+-					for i,v in pairs(body)do
+-						for index,seat in pairs(SEAT)do
+-							if(seat.hash == v and seat.playertype ~= "cpu")then
+-								seat:Leave();
+-							end
+-						end
+-					end
+-				end
+-			end
+-
+-			getTaskServer();
+-		end
+-		wait(1);
+-	end
+-end
+-
+ function network_OnClose()
+ end
+ 
+ 
+ ---------------------------------------------------------
+ 
+-function getTaskServer(tasknum)
+-	if(Socket==nil)then
+-		return false;
+-	end
+-	if(bNetwork==false)then
+-		return false;
+-	end
+-	
+-	if(tasknum == nil)then
+-		local filename = "/rooms/"..__compileTimeStamp.."/"..Socket.roomnum.."/".."tasknum";
+-		local result, body = POSTSend(Socket, filename, nil, "GET");
+-		if(result < 0 or type(body)~="table")then
+-			return false;
+-		end
+-		-- _dm("getTaskServer : Socket.snum = "..tostring(Socket.snum));
+-		-- _dm("getTaskServer : body[1] = "..tostring(body[1]));
+-		if(tonumber(body[1]) == nil)then
+-			-- 数字に置換できなかったのでエラーとする
+-			return false;
+-		end
+-		if(Socket.snum > tonumber(body[1]))then
+-			return false;
+-		end
+-	end
+-
+-	local filename = "/rooms/"..__compileTimeStamp.."/"..Socket.roomnum.."/".."task_"..Socket.snum;
+-	local result, body = POSTSend(Socket, filename, nil, "GET");
+-	if(result < 0)then
+-		return false;
+-	end
+-	
+-	if( #(body) > 0 )then
+-		-- 成功したので記録を保存する。
+-		while(#(body) > 0)do
+-			v = table.remove(body, 1);
+-			if(string.len(v) < 1)then
+-				break;
+-			end
+-			
+-			local f,t,n_index,n_body = string.find(v, "task:(%d-):(.*)");
+-			local str = deserialize(n_body);
+-			if(type(str) ~= "table")then
+-				_dm("壊れたデータ＠getTaskServer："..tostring(v));
+-			elseif(tonumber(str.roomnum) == tonumber(Socket.roomnum))then
+-				_dm("正しいデータ＠getTaskServer["..n_index.."]："..tostring(n_body));
+-				TASK[ tonumber(n_index) ] = tostring(n_body);
+-				Socket.snum = n_index + 1;
+-			end
+-			
+-			if(REPLAYMODE)then
+-				if( str.tag == "Ryukyoku" or 
+-					str.task == "ActAgari" or
+-					(str.task == "OnFuro" and str.env.task == "ActRon")
+-				)then
+-					REPLAY_FORCE_RUNNING = true;
+-				end
+-			end
+-		end
+-	end
+-	return true;
+-	
+-end
+-
+-function sendTaskServer(taskdata, level)
+-	if(bNetwork==false)then
+-		return true, nil;	-- 送信する必要が無いのでtrue
+-	end
+-	if(REPLAYMODE)then
+-		--_dm("リプレイ中なので無視");
+-		return true, nil;	-- 送信する必要が無いのでtrue
+-	end
+-	
+-	if( type(taskdata) ~= "table" )then
+-		-- 引数間違ってる
+-		_dm("taskdata not table.");
+-		return false, nil;
+-	end
+-	
++function send_game_event(taskdata)
+ 	-- 再帰のカウントを取得
+-	if(level==nil)then
+-		level = 0;
+-		taskdata.tag = getUUID();
+-	elseif(level > 5)then
+-		_dm("sendTaskServer all failed.");
+-		
+-		-- タスクを構築しなおし
+-		taskRebuild();
+-		level = 0;
+-		--既に自分の情報が登録されていたらデータ送信は行わずに戻る
+-		if(TASK[Socket.snum] ~= nil)then
+-			local t = TASK[Socket.snum];
+-			if(t.tag == taskdata.tag)then
+-				-- UUIDが一致したので抜ける
+-				return true, Socket.snum;
+-			end
+-		end
+-		
+-	end
++	taskdata.tag = getUUID();
+ 	
+ 	-- 管理用のデータを追加する
+-	local result, body, str;
+-	-- taskdata.time = os.time();
+ 	taskdata.roomnum = Socket.roomnum;
+-	local send = {
+-		func = "game_taskrecv";
+-		roomnum = Socket.roomnum;
+-		snum = Socket.snum;
+-		pass = Socket.roompassword;
+-		hash = md5string(SERIAL:get("pin"));
+-		q = string.gsub(serialize(taskdata), "\n", "");
++	local payload = {
++		index = Socket.snum,
++		player_id = md5string(SERIAL:get("pin")),
++		data = taskdata
+ 	}
+-	if(SEAT[ taskdata.seat ].hash == "CPU")then
+-		send.hash = "CPU";
+-	end
++
+ 	if(taskdata.seat ~= nil)then
+-		send.seat = tonumber(taskdata.seat);
+-	end
+-	result,body = POSTSend(Socket, "/index.php", send);
+-
+-	local retry = true;
+-	if(result == 0)then
+-		-- 送信に成功した
+-		if(type(body) == "table")then
+-			if(body[1] == "OK")then
+-			elseif(body[1] == "TASK_REGISTED")then
+-				-- 既にIDが登録されていたので一度データを受信してTASKを更新する
+-				_dm("task registed. TASK Rebuild start");
+-			else
+-				_dm("Unknown Error :"..tostring(table.concat(body)));
+-			end
+-			getTaskServer(send.snum);
+-			local t = deserialize(TASK[ send.snum ]);
+-			-- _dm("Socket.snum => "..tostring(Socket.snum));
+-			-- _dm("task check taskdata["..send.snum.."]<br> "..tostring(serialize(taskdata)));
+-			-- _dm("task check TASK["..send.snum.."]<br> "..tostring(TASK[ send.snum ]));
+-			if(type(t)=="table")then
+-				local field = {"time","seat","roomnum","task"};
+-				local check = false;
+-				for i,v in pairs(field)do
+-					_dm(tostring(v).."=>"..tostring(taskdata[v])..":"..tostring(t[v]));
+-					if(tostring(taskdata[v]) ~=tostring(t[v]))then
+-						check = true;
+-					end
+-				end
+-				retry = check;
+-			end
+-		end
++		payload.seat = tonumber(taskdata.seat);
+ 	end
+ 	
+-	if(retry)then
+-		-- 送信に失敗した
+-		_dm("sendServer "..level.." failed. Retry");
+-		level = level + 1;
+-		local r,i = sendTaskServer(taskdata, level);
+-		return r,i;
++	local sent_successfully = gensou.add_game_event(WSCLIENT, payload)
++
++	if sent_successfully then
++		Socket.snum = 1 + payload.index
++		return true, payload.snum
++	else
++		_dm("[error] couldn't send a game event index:"..tostring(payload.snum))
++		return false, nil
+ 	end
+-	_dm("sendServer "..level.." success.");
+-	return true, send.snum;
+-	
+ end
+ 
+ -- 引数：欲しいタスクのインデックス, 特殊命令系を返すかどうか（Default:nil 返さない）
+@@ -283,7 +105,7 @@ function getTask(index, special)
+ 
+ 	if( TASK[index] ~= nil )then
+ 		--local f,t,n_index,n_body = string.find(TASK[index], "(%d-):(.*)");
+-		local taskdata = deserialize(TASK[index]);
++		local taskdata = TASK[index];
+ 		
+ 		-- 最後に実行した時間を保存する
+ 		if(type(taskdata) ~= "table")then
+@@ -312,55 +134,31 @@ function sendTask(task_data)
+ 	end
+ 
+ 	if( bNetwork )then
+-		local sendres, idx = sendTaskServer(task_data);
++		local sendres, idx = send_game_event(task_data);
+ 	else
+-		table.insert(TASK, serialize(task_data));
++		table.insert(TASK, task_data);
+ 	end
+ 
+ 	return true;
+ end
+ 
+-function taskRebuild()
+-	if(bNetwork==false)then
+-		return false;
+-	end
+-	
+-	-- 全データを取得しなおす
+-	local build = true;
+-	local tasks = {};
+-	local i=1;
+-	while(build)do
+-		local filename = "/rooms/"..__compileTimeStamp.."/"..Socket.roomnum.."/".."task_"..i;
+-		local result, body = POSTSend(Socket, filename, nil, "GET");
+-		
+-		build = false;
+-		if(result == 0 and #(body) > 0)then
+-			local v = body[1];
+-			if(string.len(v) > 0)then
+-				local f,t,n_index,n_body = string.find(v, "task:(%d-):(.*)");
+-				local str = deserialize(n_body);
+-				if(tonumber(str.roomnum) == tonumber(Socket.roomnum))then
+-					_dm("正しいデータ＠getTaskServer["..i.."]："..tostring(n_body));
+-					tasks[ tonumber(i) ] = tostring(n_body);
+-					i = i + 1;
+-					build = true;
+-				end
+-			end
+-		end
++function handle_game_event(event)
++	-- HACK vulnerable to desyncs
++	local event_data = event.data.data
++	if(tonumber(event_data.roomnum) == tonumber(Socket.roomnum))then
++		Socket.snum = 1 + event.data.index
++		TASK[event.data.index] = event_data
++	else
++		_dm("[warning] received game event for a different game: "..event.data.data)
+ 	end
+-	
+-	-- 比較してデータを正しく整頓させていく
+-	for i,v in pairs(tasks) do
+-		Socket.snum = i;
+-		if(TASK[i] ~= v)then
+-			_dm("b_taskdiff from: "..tostring(v));
+-			_dm("b_taskdiff   to: "..tostring(TASK[i]));
+-			TASK[i] = v;
++end
++
++function handle_player_disconnected(event)
++	for index, player in pairs(SEAT)do
++		if(player.hash == event.data.id and player.playertype ~= "cpu") then
++			player:Leave()
+ 		end
+ 	end
+-	
+-	return;
+-
+ end
+ 
+ -- サーバにデータを保存する
+diff --git a/S/SCENE/SUBMENU/QUIT.LUA b/S/SCENE/SUBMENU/QUIT.LUA
+index bf7eb22..194c8af 100644
+--- a/S/SCENE/SUBMENU/QUIT.LUA
++++ b/S/SCENE/SUBMENU/QUIT.LUA
+@@ -107,15 +107,7 @@ function sub_quit_btQuit_Click(self,args)
+ 	if(bNetwork)then
+ 		-- 対局から抜ける
+ 		--_dm("対局から抜ける");
+-		local send = {
+-			roomnum = Socket.roomnum;
+-			pass = Socket.roompassword;
+-			func = "game_leave";
+-			pin = SERIAL:get("pin");
+-			hash = md5string(SERIAL:get("pin"));
+-			gamever = GAME_VER;
+-		};
+-		local result, body = POSTSend(Socket, "/index.php", send);
++		gensou.leave_room(WSCLIENT)
+ 	end
+ 
+ 	saveSavedata();
+diff --git a/S/SCENE/TELOP.LUA b/S/SCENE/TELOP.LUA
+index a2c5477..f539514 100644
+--- a/S/SCENE/TELOP.LUA
++++ b/S/SCENE/TELOP.LUA
+@@ -2,15 +2,14 @@
+ -- テロップ表示用のアクタークラス
+ --
+ 
+-TELOP_TCP = nil;
++TELOP_STATIC_STR = {"Get the latest information when connected to network."};
++TELOP_REMAINING_STR = nil;
+ TELOP_SIZE = 16;
+-TELOP_STR = "";
++TELOP_SPEED = 0.7;
+ FONT_TELOP = nil;
+-TELOP_SPEED = 0.5;
+ TELOP_X = 0;
+ TELOP_CALL = false;
+ TELOP_ADD = false;
+-TELOP_SOCKET = nil;
+ TELOP_RIGHT = _SCREEN.left+1256;
+ TELOP_LEFT = _SCREEN.left+968;
+ 
+@@ -33,7 +32,6 @@ table.insert(PRIOR_INITIALIZER_LIST, telop_prior_init);
+ ---------------------------------------------------------------------
+ 
+ function telop_OnStart()
+-
+ 	A.telop={};
+ 	A.telop.string = {};
+ 	A.telop.frames   = {
+@@ -61,11 +59,8 @@ function telop_OnStart()
+ 	-- addMover(A.telop.white, -1, 1, MOVER_SETZOOM, _SCREEN.width, _SCREEN.height);
+ 	setLayerClip(3,true,_SCREEN.left+968,_SCREEN.top+0,_SCREEN.left+1256,_SCREEN.top+31);
+ 
+-	if(_TRIAL)then
+-		A.telop.fps = createTextActor(TFONT_SYS16,"** fps",_SCREEN.left+8,_SCREEN.top+32,4);
+-	end
++	A.telop.fps = createTextActor(TFONT_SYS16,"** fps",_SCREEN.left+8,_SCREEN.top+32,4);
+ 	setLayerUseSpecular(5,true);
+-
+ end
+ 
+ _NET_CONDITION = 3;
+@@ -92,17 +87,15 @@ function telop_OnStep()
+ 			if ( NET_CONDITION==1) then
+ 				addMover(A.telop.net_malfunction,-1,1,MOVER_SETALPHA,255);
+ 			else
+-				 addMover(A.telop.net_malfunction,-1,1,MOVER_SETALPHA,0);
++				addMover(A.telop.net_malfunction,-1,1,MOVER_SETALPHA,0);
+ 			end
+ 			_NET_CONDITION = NET_CONDITION;
+ 		end
+ 		------------------------------------------------
+ 		-- 実績テロップの管理
+ 		------------------------------------------------
+-		if(_TRIAL and getSceneUptime() % 60 == 0)then
+-			local fps = string.format( "%d fps", getFPS() );
+-			setActorString(A.telop.fps, fps);
+-		end
++		local fps = string.format( "%d fps", getFPS() );
++		setActorString(A.telop.fps, fps);
+ 		
+ 		if ( #(TELOP_PARAM.achievement_req)>0 and TELOP_PARAM.aBulletin == nil )then
+ 			TELOP_PARAM.current_achievement = table.remove(TELOP_PARAM.achievement_req,1);
+@@ -176,8 +169,11 @@ function telop_showMusicTelop ( title,artist )
+ end
+ 
+ function t_telop()
+-	getTelopData();
+-	while(1)do
++	while(1) do
++		if TELOP_REMAINING_STR == nil or (type(TELOP_REMAINING_STR)=="table" and next(TELOP_REMAINING_STR) == nil) then
++			TELOP_REMAINING_STR = clone_table(TELOP_STATIC_STR)
++		end
++
+ 		TELOP_X = TELOP_X - TELOP_SPEED;
+ 		if (TELOP_X < 0)then
+ 			TELOP_X = 0;
+@@ -193,14 +189,14 @@ function t_telop()
+ 		
+ 		if (TELOP_ADD)then
+ 			TELOP_ADD = false;
+-			if (type(TELOP_STR)=="table")then
+-				while(#(TELOP_STR)>0)do
+-					telop_start( table.remove(TELOP_STR, 1) );
++			if (type(TELOP_REMAINING_STR)=="table")then
++				while(#(TELOP_REMAINING_STR)>0)do
++					telop_start( table.remove(TELOP_REMAINING_STR, 1) );
+ 				end
+-			elseif (type(TELOP_STR)=="string")then
+-				telop_start(TELOP_STR);
++			elseif (type(TELOP_REMAINING_STR)=="string")then
++				telop_start(TELOP_REMAINING_STR);
+ 			end
+-			TELOP_STR = nil;
++			TELOP_REMAINING_STR = nil;
+ 		end
+ 		
+ 		if (isAlive(A.telop.string[1]) == false)then
+@@ -209,27 +205,15 @@ function t_telop()
+ 
+ 			if (TELOP_X < TELOP_SIZE)then
+ 				-- 最新のテロップを取りにいく
+-				if (TELOP_STR == nil)then
+-					local res = getTelopData();
+-					if (res == 0)then
+-						--_dm("Telop Data aquisition.");
+-						--TELOP_STR = Socket.tcpdata.body;
+-					elseif (res == -2)then
+-						TELOP_STR = "Failed to connect to match-making. Please try again later.";
+-					else
+-						TELOP_STR = "Get the latest information when connected to network.";
+-					end
+-				end
+-
+-				if (type(TELOP_STR)=="table")then
+-					while(#(TELOP_STR)>0)do
+-						telop_start( table.remove(TELOP_STR, 1) );
++				if (type(TELOP_REMAINING_STR)=="table")then
++					while(#(TELOP_REMAINING_STR)>0)do
++						telop_start( table.remove(TELOP_REMAINING_STR, 1) );
+ 					end
+-				elseif (type(TELOP_STR)=="string")then
+-					telop_start(TELOP_STR);
++				elseif (type(TELOP_REMAINING_STR)=="string")then
++					telop_start(TELOP_REMAINING_STR);
+ 				end
+ 
+-				TELOP_STR = nil;
++				TELOP_REMAINING_STR = nil;
+ 			end
+ 		end
+ 		wait(1);
+@@ -257,10 +241,6 @@ function telop_bulletin_thread()
+ end
+ 
+ function telop_OnClose()
+-	if (TELOP_SOCKET ~= nil)then
+-		TELOP_SOCKET = nil;
+-	end
+-	
+ 	stopThread();
+ end
+ 
+@@ -272,29 +252,10 @@ function telop_Show()
+ 	setSceneAlpha(255);
+ end
+ 
+-function getTelopData()
+-	-- テロップ用データを取得する
+-	-- 接続
+-	if (TELOP_SOCKET == nil)then
+-		TELOP_SOCKET = TCPBASE:new();
+-		TELOP_SOCKET.host = SERVER_ADDRESS;
+-		TELOP_SOCKET.port = SERVER_PORT;
+-		if(_DEBUG)then
+-			TELOP_SOCKET.host = SERVER_ADDRESS;
+-		end
+-	end
+-	
+-	local res, body = POSTSend(TELOP_SOCKET, "/thmj4n/title.txt", nil, "GET", false);
+-
+-	if (res < 0)then
+-		return -1;
+-	end
+-	TELOP_STR = clone_table(body);
+-	return 0;
+-
++function handle_motd(event)
++	TELOP_STATIC_STR = event.data.messages
+ end
+ 
+-
+ ---------------------------------------------------------------------
+ 
+ function telopstr_OnStart()
+@@ -354,7 +315,7 @@ end
+ 
+ function telop_Call(str)
+ 	TELOP_CALL = true;
+-	TELOP_STR = str;
++	TELOP_REMAINING_STR = str;
+ 	return;
+ end
+ 
+@@ -365,7 +326,7 @@ function telop_Add(str)
+ 		return;
+ 	end
+ 	TELOP_ADD = true;
+-	TELOP_STR = str;
++	TELOP_REMAINING_STR = str;
+ 	return;
+ end
+ 
+diff --git a/S/SCENE/TITLE.LUA b/S/SCENE/TITLE.LUA
+index 4f222fa..237196a 100644
+--- a/S/SCENE/TITLE.LUA
++++ b/S/SCENE/TITLE.LUA
+@@ -96,8 +96,6 @@ function title_OnStart()
+ 	local av = createTextActor(PFONT_SYS16,"Ver."..compileTimeViewString.." En patch 1.5"
+ 		,_SCREEN.left,_SCREEN.bottom,2,0,255,0,255,ALIGN_LEFT,BLEND_NORMAL,VALIGN_BOTTOM);
+ 	setv(av,64,-5);
+-	__compileTimeStamp = string.format("%4d%02d%02d%02d%02d%02d",m[2],m[3],m[4],m[5],m[6],m[7]);
+-	setWindowCaption(string.format("Touhou Gensou Mahjong 4N Ver.%4d%02d%02d",m[2],m[3],m[4]));
+ 
+ 	if(SERIAL:get("registed")==false)then
+ 		G.title.centerCharacter = loadGraphic("s/stats/characters/reimu/1/stand.png");
+-- 
+2.44.1
+
