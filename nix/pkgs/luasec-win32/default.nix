@@ -12,10 +12,10 @@ stdenv.mkDerivation rec {
   version = "1.3.2";
 
   src = fetchFromGitHub {
-    owner = "lunarmodules";
+    owner = "chinponya";
     repo = pname;
-    rev = "v${version}";
-    hash = "sha256-o3uiZQnn/ID1qAgpZAqA4R3fWWk+Ajcgx++iNu1yLWc=";
+    rev = "b8e47f9b8622370ac15d6bc12c6fbb2c49a71b93";
+    hash = "sha256-CrRor9PL6+rI8F6cSXQHJUAXpWx8s5vzfpGnMAyIRro=";
   };
 
   buildInputs = [
