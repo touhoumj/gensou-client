@@ -10,19 +10,27 @@
       let
         pkgs = nixpkgs.legacyPackages.${system};
         win32Pkgs = pkgs.callPackage ./nix/cross/win32.nix { };
-
         zig-cross = pkgs.callPackage ./nix/pkgs/zig-cross.nix { };
-
-        effil-win32 = win32Pkgs.callPackage ./nix/pkgs/effil-win32.nix { inherit zig-cross; };
-        luajit-win32 = win32Pkgs.callPackage ./nix/pkgs/luajit-win32.nix {
-          hostStdenv = pkgs.pkgsi686Linux.stdenv;
-        };
-        luasocket-win32 = win32Pkgs.callPackage ./nix/pkgs/luasocket-win32.nix { };
-        luasec-win32 = win32Pkgs.callPackage ./nix/pkgs/luasec-win32 { luasocket = luasocket-win32; };
-
         detours = win32Pkgs.callPackage ./nix/pkgs/detours.nix { };
+      in {
+        packages.effil-win32 =
+          win32Pkgs.callPackage ./nix/pkgs/effil-win32.nix {
+            inherit zig-cross;
+          };
 
-        tools = pkgs.stdenv.mkDerivation {
+        packages.luajit-win32 =
+          win32Pkgs.callPackage ./nix/pkgs/luajit-win32.nix {
+            hostStdenv = pkgs.pkgsi686Linux.stdenv;
+          };
+
+        packages.luasocket-win32 =
+          win32Pkgs.callPackage ./nix/pkgs/luasocket-win32.nix { };
+
+        packages.luasec-win32 = win32Pkgs.callPackage ./nix/pkgs/luasec-win32 {
+          luasocket = self.packages.${system}.luasocket-win32;
+        };
+
+        packages.thmj4n-tools = pkgs.stdenv.mkDerivation {
           pname = "thmj4n-tools";
           version = "1.0.0";
 
@@ -37,25 +45,20 @@
             ];
           };
 
-          nativeBuildInputs = with pkgs; [
-            cmake
-            zig
-          ];
+          nativeBuildInputs = with pkgs; [ cmake zig ];
 
-          cmakeFlags = [
-            "-DCMAKE_TOOLCHAIN_FILE=${zig-cross}"
-          ];
+          cmakeFlags = [ "-DCMAKE_TOOLCHAIN_FILE=${zig-cross}" ];
 
           DETOURS_SRC = detours;
         };
 
-        deps = pkgs.stdenv.mkDerivation {
+        packages.thmj4n-deps = pkgs.stdenv.mkDerivation {
           pname = "thmj4n-deps";
           version = "1.0.0";
 
           phases = [ "installPhase" ];
 
-          installPhase = ''
+          installPhase = with self.packages.${system}; ''
             mkdir $out/
             mkdir $out/lua
 
@@ -65,16 +68,15 @@
             cp --no-preserve=mode -r ${luasec-win32}/share/lua/5.1/* $out/lua/
             cp --no-preserve=mode -r ${luasocket-win32}/lua/5.1/* $out/
 
-            cp --no-preserve=mode ${tools}/bin/libkotldr.dll $out/kotldr.dll
-            cp --no-preserve=mode ${tools}/bin/run_n_gun_32.exe $out/
+            cp --no-preserve=mode ${thmj4n-tools}/bin/libkotldr.dll $out/kotldr.dll
+            cp --no-preserve=mode ${thmj4n-tools}/bin/run_n_gun_32.exe $out/
 
             find $out/ -type f \( -name '*.dll' -o -name '*.exe' \) \
               -exec strip {} \;
           '';
         };
-      in
-      {
-        formatter = pkgs.nixpkgs-fmt;
+
+        packages.default = self.packages.${system}.thmj4n-deps;
 
         devShells.default = pkgs.mkShell {
           packages = with pkgs; [
@@ -90,6 +92,6 @@
           DETOURS_SRC = detours;
         };
 
-        packages.default = deps;
+        formatter = pkgs.nixpkgs-fmt;
       });
 }
