@@ -1,4 +1,4 @@
-{ fetchFromGitHub , stdenv }:
+{ fetchFromGitHub, stdenv }:
 
 stdenv.mkDerivation rec {
   pname = "mediator";
@@ -10,6 +10,8 @@ stdenv.mkDerivation rec {
     rev = "ae97959308b462d84d0255f511c8e14cdf06667f";
     hash = "sha256-6UFahaOr/IQlPbocoxmWMM8P6fqjjm/QpzMUMwKABPE=";
   };
+
+  phases = [ "installPhase" ];
 
   installPhase = ''
     mkdir $out

@@ -12,7 +12,8 @@
         win32Pkgs = pkgs.callPackage ./nix/cross/win32.nix { };
         zig-cross = pkgs.callPackage ./nix/pkgs/zig-cross.nix { };
         detours = win32Pkgs.callPackage ./nix/pkgs/detours.nix { };
-      in {
+      in
+      {
         packages.effil-win32 =
           win32Pkgs.callPackage ./nix/pkgs/effil-win32.nix {
             inherit zig-cross;
@@ -41,7 +42,11 @@
           pname = "gensou";
           version = "0.1.0";
 
-          src = nix-filter { root = "${self}/src"; };
+          src = nix-filter {
+            root = "${self}/src";
+          };
+
+          phases = [ "installPhase" ];
 
           installPhase = ''
             mkdir $out
@@ -66,7 +71,14 @@
 
           nativeBuildInputs = with pkgs; [ cmake zig ];
 
-          cmakeFlags = [ "-DCMAKE_TOOLCHAIN_FILE=${zig-cross}" ];
+          cmakeFlags = [
+            "-DCMAKE_TOOLCHAIN_FILE=${zig-cross}"
+          ];
+
+          postInstall = ''
+            find $out/ -type f \( -name '*.dll' -o -name '*.exe' \) \
+              -exec strip {} \;
+          '';
 
           DETOURS_SRC = detours;
         };
