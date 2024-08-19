@@ -121,6 +121,7 @@
           ];
 
           DETOURS_SRC = detours;
+          CMAKE_TOOLCHAIN = zig-cross;
         };
 
         formatter = pkgs.nixpkgs-fmt;
