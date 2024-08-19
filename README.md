@@ -1,6 +1,6 @@
 # Gensou Client
 This repo contains game modifications, tools and build scripts used to modify the Touhou Unreal Mahjong 4N game to use a private server,
-located in a separate [Gensou repository](https://github.com/chinponya/thmj4n).
+located in a separate [Gensou repository](https://github.com/touhoumj/gensou).
 
 **Steps outlined in this document are completely optional, if you just want to play the game.**
 **You can find a patched game, configured to use a public instance of the private server, on the /mjg/ repo.**
