@@ -1,0 +1,176 @@
+From a8e489104d1dd2064517cb01cf9678c702f9e5c4 Mon Sep 17 00:00:00 2001
+From: Chinpo Nya <czen+github@honk.li>
+Date: Tue, 20 Aug 2024 05:53:41 +0200
+Subject: [PATCH 5/5] support smaller player updates
+
+---
+ BOOT.LUA                    | 10 ++---
+ S/SCENE/GAME/00_LOADING.LUA |  2 +-
+ S/SCENE/MULTI.LUA           |  8 ----
+ S/SCENE/MULTI/WAIT.LUA      | 79 +++++++++++++++++++++++++++++++++++--
+ 4 files changed, 82 insertions(+), 17 deletions(-)
+
+diff --git a/BOOT.LUA b/BOOT.LUA
+index 1fe6203..e0466ae 100644
+--- a/BOOT.LUA
++++ b/BOOT.LUA
+@@ -10,11 +10,6 @@
+ package.path = ".\\deps\\lua\\?.lua;" .. package.path
+ package.cpath = ".\\deps\\?.dll;" .. package.cpath
+ 
+--- Make cbor available everywhere for comparisons against cbor.null
+-cbor = require("cbor")
+-gensou = require("gensou")
+-require("gensou.scene")
+-
+ -- TODO remove in release
+ local log_row_id = 0;
+ local log_file = io.open("debug.log", "w")
+@@ -207,6 +202,11 @@ prequire("s/actor/taku_entity/global_status.lua");
+ prequire("s/se.lua");
+ prequire("s/music.lua");
+ 
++-- Make cbor available everywhere for comparisons against cbor.null
++cbor = require("cbor")
++gensou = require("gensou")
++require("gensou.scene")
++
+ -------------------------------------------
+ -- OnLoadÅ@ãNìÆíºå„Ç…åƒÇŒÇÍÇÈ
+ -------------------------------------------
+diff --git a/S/SCENE/GAME/00_LOADING.LUA b/S/SCENE/GAME/00_LOADING.LUA
+index 286f222..8ae6a70 100644
+--- a/S/SCENE/GAME/00_LOADING.LUA
++++ b/S/SCENE/GAME/00_LOADING.LUA
+@@ -48,7 +48,7 @@ function handle_loading_state(event)
+ 	for i, v in pairs(SEAT) do
+ 		if v.hash == event.data.id then
+ 			_dm(string.format("[info] player '%s' (id:%s) changed loading state: %s", v.name, event.data.id, event.data.loading))
+-			v.loading = event.data.loading
++			v.loading = event.data.state
+ 			return
+ 		end
+ 	end
+diff --git a/S/SCENE/MULTI.LUA b/S/SCENE/MULTI.LUA
+index 80f5948..36d1ffe 100644
+--- a/S/SCENE/MULTI.LUA
++++ b/S/SCENE/MULTI.LUA
+@@ -228,14 +228,6 @@ function join_room()
+ 	return gensou.join_room(WSCLIENT, payload)
+ end
+ 
+-function handle_join_room(event)
+-	if event.success then
+-		NEXT_THREAD = "t_multi_room_wait"
+-	else
+-		show_ingamepopup("Failed to enter the room.\n"..event.error)
+-	end
+-end
+-
+ function create_room()
+ 	-- ïîâÆÇÃçÏê¨
+ 	Socket.roomnum = nil;
+diff --git a/S/SCENE/MULTI/WAIT.LUA b/S/SCENE/MULTI/WAIT.LUA
+index 4febcc0..19ae627 100644
+--- a/S/SCENE/MULTI/WAIT.LUA
++++ b/S/SCENE/MULTI/WAIT.LUA
+@@ -221,13 +221,17 @@ function handle_game_start(event)
+ 	MULTI_ROOM_CREATE_VARS.gamestart = true
+ end
+ 
+-function handle_players_changed(event)
+-	_dm("received player state event")
++function handle_join_room(event)
++	if not event.success then
++		show_ingamepopup("Failed to enter the room.\n"..event.error)
++		return
++	end
++
+ 	local pin_hash = md5string(SERIAL:get("pin"));
+ 
+ 	PLAYER_LIST = {}
+ 
+-	for i,v in pairs(event.data)do
++	for i,v in pairs(event.data.players)do
+ 		local places
+ 		if (v.trip ~= "CPU") then
+ 			places = string.format(
+@@ -266,6 +270,75 @@ function handle_players_changed(event)
+ 		end
+ 		table.insert(PLAYER_LIST, a);
+ 	end
++
++	NEXT_THREAD = "t_multi_room_wait"
++end
++
++function handle_player_joined(event)
++	local pin_hash = md5string(SERIAL:get("pin"));
++	local player = event.data
++
++	local places
++	if (player.trip ~= "CPU") then
++		places = string.format(
++			"%d games  %dpt  %d wins",
++			player.stats.total_games,
++			player.stats.points,
++			player.stats.wins	
++		)
++	else
++		places = "Computer"
++	end
++
++	local a = {
++		sysname = player.character_id;
++		type = "player";
++		name = player.name;
++		hash = player.id;
++		titletext = player.title_text == cbor.null and "" or player.title_text;
++		titletype = player.title_type;
++		skin_index = player.character_skin;
++		chrhash = tostring(player.character_id)..tostring(player.character_skin);
++		desc = places;
++		standby = player.ready;
++		trip = player.trip;
++	}
++	if (#PLAYER_LIST == 0) then
++		ROOM_OWNER = a;
++	end
++	if (a.hash == pin_hash)then
++		a.type = "player";
++		OWN_PLAYER_LOBBY_STATE = a;
++	elseif (a.trip == "CPU" and ROOM_OWNER.hash==pin_hash)then
++		a.type = "cpu";
++	else
++		a.type = "network";
++	end
++	table.insert(PLAYER_LIST, a);
++end
++
++function handle_player_changed(event)
++	local player_index
++	for i, v in pairs(PLAYER_LIST) do
++		if v.hash == event.data.id then
++			player_index = i
++			break
++		end
++	end
++
++	if not player_index then
++		_dm("[error] received player change event for an unknown player")
++		return
++	end
++
++	if event.data.state == "left" then
++		table.remove(PLAYER_LIST, player_index)
++		ROOM_OWNER = PLAYER_LIST[1]
++	elseif event.data.state == "ready" then
++		PLAYER_LIST[player_index].standby = true
++	elseif event.data.state == "not_ready" then
++		PLAYER_LIST[player_index].standby = false
++	end
+ end
+ 
+ -- ïîâÆÇ©ÇÁëﬁé∫Ç∑ÇÈ
+-- 
+2.44.1
+
