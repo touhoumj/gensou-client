@@ -157,30 +157,12 @@ local function finish_game(client, data)
     return send(client, data, "finish_game")
 end
 
-local channels = {
-    join_lobby = {"action", "join_lobby"},
-    create_room = {"action", "create_room"},
-    join_room = {"action", "join_room"},
-    leave_room = {"action", "leave_room"},
-    add_cpu = {"action", "add_cpu"},
-    add_game_event = {"action", "add_game_event"},
-    update_readiness = {"action", "update_readiness"},
-    update_loading_state = {"action", "update_loading_state"},
-    motd = {"broadcast", "motd"},
-    lobby_changed = {"broadcast", "lobby_changed"},
-    players_changed = {"broadcast", "players_changed"},
-    player_loading_state = {"broadcast", "player_loading_state"},
-    game_event = {"broadcast", "game_event"},
-    player_disconnected = {"broadcast", "player_disconnected"}
-}
-
 return {
     util = util,
     init = init,
     send = send,
     receive = receive,
     close = close,
-    channels = channels,
     join_lobby = join_lobby,
     leave_lobby = leave_lobby,
     create_room = create_room,

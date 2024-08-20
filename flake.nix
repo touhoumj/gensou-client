@@ -33,8 +33,6 @@
 
         packages.lua-cbor = pkgs.callPackage ./nix/pkgs/lua-cbor.nix { };
 
-        packages.mediator = pkgs.callPackage ./nix/pkgs/mediator.nix { };
-
         packages.lua-websockets =
           pkgs.callPackage ./nix/pkgs/lua-websockets.nix { };
 
@@ -98,7 +96,6 @@
             cp --no-preserve=mode -r ${luasec-win32}/share/lua/5.1/* $out/deps/lua/
             cp --no-preserve=mode -r ${luasocket-win32}/lua/5.1/* $out/deps/
             cp --no-preserve=mode -r ${lua-cbor}/lua/* $out/deps/lua/
-            cp --no-preserve=mode -r ${mediator}/lua/* $out/deps/lua/
             cp --no-preserve=mode -r ${lua-websockets}/lua/* $out/deps/lua/
             cp --no-preserve=mode -r ${gensou}/lua/* $out/deps/lua/
 

@@ -1,25 +1,62 @@
 local gensou = require("gensou")
 local websocket = require("gensou.websocket")
 local gensou_config = require("gensou_config")
-local Mediator = require("mediator")
 
-local subscriptions = {}
-local channels = gensou.channels
-
-mediator = Mediator()
 WSCLIENT = nil
 
-function gensou_OnStart()
-    subscriptions.join_lobby = mediator:subscribe(channels.join_lobby, handle_join_lobby)
-    subscriptions.join_room = mediator:subscribe(channels.join_room, handle_join_room)
-    subscriptions.create_room = mediator:subscribe(channels.create_room, handle_create_room)
-    subscriptions.players_changed = mediator:subscribe(channels.players_changed, handle_players_changed)
-    subscriptions.motd = mediator:subscribe(channels.motd, handle_motd)
-    subscriptions.player_loading_state = mediator:subscribe(channels.player_loading_state, handle_loading_state)
-    subscriptions.game_event = mediator:subscribe(channels.game_event, handle_game_event)
-    subscriptions.player_disconnected = mediator:subscribe(channels.player_disconnected, handle_player_disconnected)
-    subscriptions.lobby_changed = mediator:subscribe(channels.lobby_changed, handle_lobby_changed)
+local function noop(event)
+    return
+end
 
+local function dispatch_player_changed(event)
+    local state = event.data.state
+    if state == "disconnected" then
+        handle_player_disconnected(event)
+    elseif state == "loading" or state == "loaded" then
+        handle_loading_state(event)
+    else
+        handle_player_changed(event)
+    end
+end
+
+local action_handlers = {
+    auth = noop,
+    join_lobby = handle_join_lobby,
+    leave_lobby = noop,
+    create_room = handle_create_room,
+    join_room = handle_join_room,
+    leave_room = handle_leave_room,
+    add_cpu = handle_add_cpu,
+    add_game_event = noop,
+    update_readiness = noop,
+    update_loading_state = handle_update_loading_state
+}
+
+local broadcast_handlers = {
+    motd = handle_motd,
+    lobby_changed = handle_lobby_changed,
+    player_joined = handle_player_joined,
+    player_changed = dispatch_player_changed,
+    game_event = handle_game_event
+}
+
+local function dispatch(event)
+    local handler
+
+    if event.action then
+        handler = action_handlers[event.action]
+    elseif event.channel then
+        handler = broadcast_handlers[event.channel]
+    end
+
+    if handler then
+        handler(event)
+    else
+        _dm("[warning] no registered handler for event " .. (event.action or event.channel or "unknown"))
+    end
+end
+
+function gensou_OnStart()
     WSCLIENT = gensou.init(gensou_config.address, SERIAL:get("pin"))
 end
 
@@ -38,13 +75,7 @@ function gensou_OnStep()
     if opcode == websocket.frame.BINARY then
         neticonHideTransferring()
         _dm("ws message: " .. gensou.util.dump(message))
-
-        if message.action then
-            mediator:publish({"action", message.action}, message)
-        end
-        if message.channel then
-            mediator:publish({"broadcast", message.channel}, message)
-        end
+        dispatch(message)
     end
 
     if error_code then
