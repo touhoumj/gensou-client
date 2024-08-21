@@ -20,7 +20,7 @@ nix build .#thmj4n-deps
 The server address can be configured in the `deps/lua/gensou_config.lua` file.
 For convenience, this file can be moved to the game's root directory.
 
-Place the bundle inside game's directory and proceed to the next section, in order to make the game actually it.
+Place the bundle inside game's directory and proceed to the next section, in order to make the game actually use it.
 
 ## Modifying the game
 
