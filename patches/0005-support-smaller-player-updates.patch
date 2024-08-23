@@ -1,7 +1,7 @@
-From a8e489104d1dd2064517cb01cf9678c702f9e5c4 Mon Sep 17 00:00:00 2001
+From 6e583dd1e3995bbdd9653ffa316d306f11600510 Mon Sep 17 00:00:00 2001
 From: Chinpo Nya <czen+github@honk.li>
 Date: Tue, 20 Aug 2024 05:53:41 +0200
-Subject: [PATCH 5/5] support smaller player updates
+Subject: [PATCH 5/6] support smaller player updates
 
 ---
  BOOT.LUA                    | 10 ++---

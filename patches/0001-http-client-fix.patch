@@ -1,7 +1,7 @@
-From 21f04792fa9785a1dbed01ff4702e07d8111ea1c Mon Sep 17 00:00:00 2001
+From 71a80f12b89da9981dfa3aabdd88e3200e35d92a Mon Sep 17 00:00:00 2001
 From: Chinpo Nya <czen+github@honk.li>
 Date: Mon, 16 Oct 2023 03:46:12 +0200
-Subject: [PATCH 1/4] http client fix
+Subject: [PATCH 1/6] http client fix
 
 ---
  S/LIB/SOCKET.LUA | 4 ++--

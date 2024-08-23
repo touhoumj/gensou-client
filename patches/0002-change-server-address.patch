@@ -1,7 +1,7 @@
-From 73b57547b336cb19383d04c1cd68a490e138d4a4 Mon Sep 17 00:00:00 2001
+From 32b2b61052426c4f3f3d174c8429cdabe79c4727 Mon Sep 17 00:00:00 2001
 From: Chinpo Nya <czen+github@honk.li>
 Date: Mon, 16 Oct 2023 03:47:43 +0200
-Subject: [PATCH 2/4] change server address
+Subject: [PATCH 2/6] change server address
 
 ---
  S/DEFINE.LUA          |  3 ++

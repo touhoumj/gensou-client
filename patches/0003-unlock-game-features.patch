@@ -1,7 +1,7 @@
-From 6e5135456b6c4da9bbf6d681469df2ae19f28814 Mon Sep 17 00:00:00 2001
+From 1598bb5a895e69d8ac1714486a28dca0f511e06a Mon Sep 17 00:00:00 2001
 From: Chinpo Nya <czen+github@honk.li>
 Date: Mon, 16 Oct 2023 03:48:06 +0200
-Subject: [PATCH 3/4] unlock game features
+Subject: [PATCH 3/6] unlock game features
 
 ---
  S/SCENE/MULTI.LUA                 |  2 +

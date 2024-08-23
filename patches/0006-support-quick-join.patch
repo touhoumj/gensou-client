@@ -1,0 +1,212 @@
+From 46ec625f84c28feeac917c891c484a0c26b56fa0 Mon Sep 17 00:00:00 2001
+From: Chinpo Nya <czen+github@honk.li>
+Date: Sat, 24 Aug 2024 00:37:45 +0200
+Subject: [PATCH 6/6] support quick join
+
+---
+ S/SCENE/MULTI.LUA       | 75 ++++++++++++++++++-----------------------
+ S/SCENE/MULTI/QUICK.LUA | 74 ++++++++++++----------------------------
+ VERSION.TXT             |  2 +-
+ 3 files changed, 55 insertions(+), 96 deletions(-)
+
+diff --git a/S/SCENE/MULTI.LUA b/S/SCENE/MULTI.LUA
+index 36d1ffe..ea11cd8 100644
+--- a/S/SCENE/MULTI.LUA
++++ b/S/SCENE/MULTI.LUA
+@@ -152,49 +152,6 @@ prequire("s/scene/multi/quick.lua");
+ ]]
+ -------------------------------------------------------------------------------
+ 
+-
+-
+-
+-
+--------------------------------------------------------------------------------
+---[[
+-	 ネットワーク用の関数いろいろ
+-	 room_create
+-	 room_join
+-	 quick_create
+-	 room_refresh
+-
+-]]
+--------------------------------------------------------------------------------
+-function quick_create()
+-	local query = {
+-		func = "net_quick";
+-		pin = SERIAL:get("pin");
+-		name = SERIAL:get("name");
+-	}
+-	local result, body = POSTSend(Socket, "/index.php", query);
+-
+-	-- エントリーに成功した場合は、部屋情報が更新されるまで待つ。
+-	-- エントリーに失敗した場合は、トップメニューまで戻る。
+-
+-	if(result == -1)then
+-		return false, body[1];
+-	end
+-
+-	if(result == 0 and type(body) == "table")then
+-		if(body[1] == "QUICK_ROOM_JOIN")then
+-			-- 成功
+-		elseif(body[1] == "QUICK_ROOM_CREATE")then
+-			-- 成功
+-		else
+-			-- 失敗
+-			return false, body[1];	--,"クイック対戦のエントリーに失敗しました。";
+-		end
+-	end
+-
+-	return true, body[2];
+-end
+-
+ function join_room()
+ 	-- 部屋に入る
+ 	-- ４では表示する戦績は「現在の所持点数：インターネット対戦回数」になるので、計算式を削りました
+@@ -273,6 +230,38 @@ function handle_create_room(event)
+ 	end
+ end
+ 
++function handle_quick_join(event)
++	if event.success then
++		Socket.roomnum = event.data.id
++		MULTI_ROOM_CREATE_VARS.roomname = event.data.name
++		MULTI_ROOM_CREATE_VARS.roomcomment = event.data.description
++		MULTI_ROOM_CREATE_VARS.time = event.data.time
++		MULTI_ROOM_CREATE_VARS.takuname = event.data.table_name
++		MULTI_ROOM_CREATE_VARS.length = event.data.game_length
++		MULTI_ROOM_CREATE_VARS.usemagic = event.data.enable_magic
++		MULTI_ROOM_CREATE_VARS.quickaccept = event.data.allow_quick_join
++
++		join_room()
++	else
++		create_quick_room()
++	end
++end
++
++function create_quick_room()
++	local table = TAKU_LIST[math.random(#TAKU_LIST)]
++	local game_length = table.sanma_only and 3 or 2
++
++	MULTI_ROOM_CREATE_VARS.roomname = "Quick Match"
++	MULTI_ROOM_CREATE_VARS.roomcomment = "Waiting for a match to start."
++	MULTI_ROOM_CREATE_VARS.time = 12
++	MULTI_ROOM_CREATE_VARS.takuname = table.name
++	MULTI_ROOM_CREATE_VARS.length = game_length
++	MULTI_ROOM_CREATE_VARS.usemagic = table.is_spellcard
++	MULTI_ROOM_CREATE_VARS.quickaccept = true
++
++	create_room()
++end
++
+ function update_readiness(flag)
+ 	if( type(flag) ~= "boolean" )then
+ 		flag = false;
+diff --git a/S/SCENE/MULTI/QUICK.LUA b/S/SCENE/MULTI/QUICK.LUA
+index e45b30a..413e4ec 100644
+--- a/S/SCENE/MULTI/QUICK.LUA
++++ b/S/SCENE/MULTI/QUICK.LUA
+@@ -1,69 +1,39 @@
+-
+ function quick_OnStart()
+-	G.multi.close = {};
+-	A.multi = {};
+-
+-	local result, param = quick_create();
+-	if(result == false)then
+-		show_ingamepopup("Failed to enter quick match.");
+-		changeScene("title");
+-		return;
+-	end
++    G.multi.close = {}
++    A.multi = {}
+ 
+-	Socket.roomnum = tonumber(param);
+-	Socket.roompassword = "";
+-	PLAYER_MAX_NUM = 4;
++	NEXT_SCENE = nil
+ 
+-	-- 部屋に入る
+-	local result, param = room_join();
+-	if(result == false)then
+-		show_ingamepopup( param );
+-		Socket.roomnum = nil;
+-		Socket.roompassword = nil;
+-		changeScene("title");
+-		return;
+-	end
+-
+-	local result, body = POSTSend(Socket, "/rooms/"..__compileTimeStamp.."/"..Socket.roomnum.."/info", nil, "GET");
+-	if (result == 0 and #body > 0)then
+-		local t_info = parseCsv( table.concat(body, "\r\n"), true);
+-		for i,v in pairs(t_info[1])do
+-			if(MULTI_ROOM_CREATE_VARS[i] ~= nil)then
+-				MULTI_ROOM_CREATE_VARS[i] = v;
+-			end
+-		end
+-		MULTI_ROOM_CREATE_VARS["roomname"] = "Quick Match"; -- TEST NICO
+-		MULTI_ROOM_CREATE_VARS["roomcomment"] = "Waiting for a match to start."; -- TEST NICO
+-	end
+-	
+ 	GAME_LENGTH = nil;
+ 	PLAYER_MAX_NUM = 4;
+ 	MENU_INDEX = 1;
+ 	PLAYER_LIST = {};
+-	-- setHeader("multi");
+-
+ 	Socket.snum = 1;
+ 
+-	cls(AGT.L_WINDOW);
+-	cls(AGT.L_STATIC);
+-	cls(AGT.L_COMPONENT);
+-	AGT.SetupScene();
+-
+-	NEXT_SCENE = "title";
+-
+-	multi_lobby_InitializeComponent ()
+-
+-	startThread("t_multi_room_wait");
++    gensou.quick_join(WSCLIENT)
+ 
++    cls(AGT.L_WINDOW);
++    cls(AGT.L_STATIC);
++    cls(AGT.L_COMPONENT);
++    AGT.SetupScene();
+ end
+ 
+ function quick_OnStep()
+-	if(isThreadRunning())then
+-		return;
+-	end
+-	changeScene(NEXT_SCENE);
++    if (isThreadRunning()) then
++        return
++    end
++
++    if (NEXT_SCENE ~= nil) then
++        changeScene(NEXT_SCENE)
++        NEXT_SCENE = nil
++    elseif (NEXT_THREAD ~= nil) then
++        _dm("NEXT_THREAD:" .. NEXT_THREAD)
++        startThread(NEXT_THREAD)
++        NEXT_THREAD = nil;
++    end
++
++    wait(1)
+ end
+ 
+ function quick_OnClose()
+ end
+-
+diff --git a/VERSION.TXT b/VERSION.TXT
+index 8bb4cdd..0b9bdbc 100644
+--- a/VERSION.TXT
++++ b/VERSION.TXT
+@@ -1 +1 @@
+-1,2014,08,30,22,35,44
+\ No newline at end of file
++1,2024,08,23,21,58,11
+\ No newline at end of file
+-- 
+2.44.1
+

@@ -1,7 +1,7 @@
-From df2a15d86e4fd286e0711e7ca313f0d0f17f1d8e Mon Sep 17 00:00:00 2001
+From 367e4c12f2ef2391a533002d1b94ceb161759449 Mon Sep 17 00:00:00 2001
 From: Chinpo Nya <czen+github@honk.li>
 Date: Sun, 18 Aug 2024 18:15:30 +0200
-Subject: [PATCH 4/4] rewrite the networking
+Subject: [PATCH 4/6] rewrite the networking
 
 ---
  BOOT.LUA                    |  72 +++++----
