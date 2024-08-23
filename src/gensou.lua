@@ -130,6 +130,10 @@ local function join_room(client, data)
     return send(client, data, "join_room")
 end
 
+local function quick_join(client)
+    return send(client, nil, "quick_join")
+end
+
 local function create_room(client, data)
     return send(client, data, "create_room")
 end
@@ -168,6 +172,7 @@ return {
     leave_lobby = leave_lobby,
     create_room = create_room,
     join_room = join_room,
+    quick_join = quick_join,
     leave_room = leave_room,
     add_cpu = add_cpu,
     update_readiness = update_readiness,
