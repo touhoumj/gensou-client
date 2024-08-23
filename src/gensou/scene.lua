@@ -29,7 +29,8 @@ local action_handlers = {
     add_cpu = handle_add_cpu,
     add_game_event = noop,
     update_readiness = noop,
-    update_loading_state = handle_update_loading_state
+    update_loading_state = handle_update_loading_state,
+    finish_game = noop
 }
 
 local broadcast_handlers = {
@@ -57,7 +58,7 @@ local function dispatch(event)
 end
 
 function gensou_OnStart()
-    WSCLIENT = gensou.init(gensou_config.address, SERIAL:get("pin"))
+    WSCLIENT = gensou.init(gensou_config.address, __compileTimeStamp, SERIAL:get("pin"))
 end
 
 function gensou_OnStep()

@@ -4,7 +4,7 @@ local effil = require("effil")
 local cbor = require("cbor")
 cbor.type_encoders.string = cbor.type_encoders.utf8string
 
-local function worker(address, serial_key, send_chan, send_result_chan, recv_chan, close_chan)
+local function worker(address, game_version, serial_key, send_chan, send_result_chan, recv_chan, close_chan)
     local generate_request_id = require("gensou.util").generate_request_id
     local effil = require("effil")
     local websocket = require("gensou.websocket")
@@ -37,7 +37,8 @@ local function worker(address, serial_key, send_chan, send_result_chan, recv_cha
                     id = generate_request_id(),
                     action = "auth",
                     data = {
-                        key = serial_key
+                        game_version = game_version,
+                        serial_key = serial_key
                     }
                 }
                 client:send(cbor.encode(payload), websocket.frame.BINARY)
@@ -65,12 +66,12 @@ local function worker(address, serial_key, send_chan, send_result_chan, recv_cha
     end
 end
 
-local function init(address, serial_key)
+local function init(address, game_version, serial_key)
     local send_chan = effil.channel()
     local send_result_chan = effil.channel()
     local recv_chan = effil.channel()
     local close_chan = effil.channel()
-    local thread = effil.thread(worker)(address, serial_key, send_chan, send_result_chan, recv_chan, close_chan)
+    local thread = effil.thread(worker)(address, game_version, serial_key, send_chan, send_result_chan, recv_chan, close_chan)
     return {
         thread = thread,
         send_chan = send_chan,
