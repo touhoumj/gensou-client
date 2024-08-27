@@ -15,6 +15,6 @@ stdenv.mkDerivation rec {
 
   installPhase = ''
     mkdir $out
-    cp --no-preserve=mode -r src $out/lua
+    cp --no-preserve=mode -r $src/src $out/lua
   '';
 }
