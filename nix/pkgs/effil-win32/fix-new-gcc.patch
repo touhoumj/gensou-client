@@ -1,0 +1,46 @@
+From 2f84eb80cafc85f989af2bafa9d2843174d5a259 Mon Sep 17 00:00:00 2001
+From: bin <bin@sleepy.rs>
+Date: Tue, 27 Aug 2024 10:59:53 -0400
+Subject: Minor fixes for building with newer version of GCC.
+
+Effectively a manual backport of 275ae2c096247097ba0ba03c773f079cbd02f1f8.
+---
+ sol/stack_push.hpp | 17 ++++++++++-------
+ 1 file changed, 10 insertions(+), 7 deletions(-)
+
+diff --git a/sol/stack_push.hpp b/sol/stack_push.hpp
+index a974bc69..4e37cbd4 100644
+--- a/sol/stack_push.hpp
++++ b/sol/stack_push.hpp
+@@ -585,7 +585,8 @@ namespace sol {
+ 			}
+
+ 			static int push(lua_State* L, const wchar_t(&str)[N], std::size_t sz) {
+-				return stack::push<const wchar_t*>(L, str, str + sz);
++				const wchar_t* str_ptr = static_cast<const wchar_t*>(str);
++				return stack::push<const wchar_t*>(L, str_ptr, str_ptr + sz);
+ 			}
+ 		};
+
+@@ -596,7 +597,8 @@ namespace sol {
+ 			}
+
+ 			static int push(lua_State* L, const char16_t(&str)[N], std::size_t sz) {
+-				return stack::push<const char16_t*>(L, str, str + sz);
++				const char16_t* str_ptr = static_cast<const char16_t*>(str);
++				return stack::push<const char16_t*>(L, str_ptr, str_ptr + sz);
+ 			}
+ 		};
+
+@@ -607,7 +609,8 @@ namespace sol {
+ 			}
+
+ 			static int push(lua_State* L, const char32_t(&str)[N], std::size_t sz) {
+-				return stack::push<const char32_t*>(L, str, str + sz);
++				const char32_t* str_ptr = static_cast<const char32_t*>(str);
++				return stack::push<const char32_t*>(L, str_ptr, str_ptr + sz);
+ 			}
+ 		};
+
+--
+2.44.1

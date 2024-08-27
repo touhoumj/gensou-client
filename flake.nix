@@ -10,14 +10,11 @@
       let
         pkgs = nixpkgs.legacyPackages.${system};
         win32Pkgs = pkgs.callPackage ./nix/cross/win32.nix { };
-        zig-cross = pkgs.callPackage ./nix/pkgs/zig-cross.nix { };
         detours = win32Pkgs.callPackage ./nix/pkgs/detours.nix { };
       in
       {
         packages.effil-win32 =
-          win32Pkgs.callPackage ./nix/pkgs/effil-win32.nix {
-            inherit zig-cross;
-          };
+          win32Pkgs.callPackage ./nix/pkgs/effil-win32 { };
 
         packages.luajit-win32 =
           win32Pkgs.callPackage ./nix/pkgs/luajit-win32.nix {
@@ -52,7 +49,7 @@
           '';
         };
 
-        packages.thmj4n-tools = pkgs.stdenv.mkDerivation {
+        packages.thmj4n-tools = win32Pkgs.stdenv.mkDerivation {
           pname = "thmj4n-tools";
           version = "1.0.0";
 
@@ -67,11 +64,7 @@
             ];
           };
 
-          nativeBuildInputs = with pkgs; [ cmake zig ];
-
-          cmakeFlags = [
-            "-DCMAKE_TOOLCHAIN_FILE=${zig-cross}"
-          ];
+          nativeBuildInputs = with pkgs; [ binutils cmake ];
 
           postInstall = ''
             find $out/ -type f \( -name '*.dll' -o -name '*.exe' \) \
@@ -111,14 +104,12 @@
             cmake
             ninja
             upx
-            zig
 
             python311Packages.pefile
             python311Packages.python
           ];
 
           DETOURS_SRC = detours;
-          CMAKE_TOOLCHAIN = zig-cross;
         };
 
         formatter = pkgs.nixpkgs-fmt;

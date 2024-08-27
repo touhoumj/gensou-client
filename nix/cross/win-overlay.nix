@@ -1,4 +1,18 @@
 (final: prev: {
+  windows = prev.windows.overrideScope (finalScope: prevScope: {
+    mingw_w64 = prevScope.mingw_w64.overrideAttrs (oldAttrs: {
+      configureFlags = oldAttrs.configureFlags ++ [
+        "--with-libraries=winpthreads"
+      ];
+    });
+  });
+
+  threadsCross =
+    prev.lib.optionalAttrs prev.targetPlatform.isMinGW {
+      model = "posix";
+      package = null;
+    };
+
   # Enable lua on Windows. This is bad and makes me sad.
   lua5_1 = prev.lua5_1.overrideAttrs (oldAttrs: {
     makeFlags = [
